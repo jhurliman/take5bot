@@ -7,14 +7,14 @@ from training_hooks import create_training_hooks
 # ==============================================================
 # begin of the most frequently changed knobs
 # ==============================================================
-collector_env_num = 2         # reduced for CPU (was 8)
-n_episode         = 4         # reduced for CPU (was 8)
-evaluator_env_num = 1         # reduced for CPU (was 3)
-num_simulations   = 25        # reduced for CPU (was 50)
-update_per_collect = 50       # reduced for CPU (was 100)
-batch_size         = 128      # reduced for CPU (was 512)
-max_env_step       = int(5e4) # reduced for CPU testing (was 2e5)
-reanalyze_ratio    = 0        # set >0 if you want re‑analyse later
+collector_env_num = 4         # increased for better data collection
+n_episode         = 8         # restored to higher value for learning
+evaluator_env_num = 2         # increased for better evaluation
+num_simulations   = 50        # restored to higher value for better MCTS
+update_per_collect = 100      # restored to original for better learning
+batch_size         = 256      # balanced for CPU performance vs learning
+max_env_step       = int(2e5)  # full training length for competitive perf
+reanalyze_ratio    = 0.25     # enable reanalysis for better learning
 # ==============================================================
 # end of the most frequently changed knobs
 # ==============================================================
@@ -28,7 +28,7 @@ take5_muzero_config = dict(
 
     # ---------- environment batch settings ----------
     env=dict(
-        stop_value=-5,                   # end training when avg penalty ≤‑5
+        stop_value=1000,                 # set very high to prevent early stopping
         collector_env_num=collector_env_num,
         evaluator_env_num=evaluator_env_num,
         n_evaluator_episode=evaluator_env_num,
@@ -38,12 +38,14 @@ take5_muzero_config = dict(
         continuous=False,                # discrete action space
         manually_discretization=False,   # not needed for discrete actions
         each_dim_disc_size=0,           # not needed for discrete actions
+        # Add timeout to prevent infinite hangs
+        timeout=300,                     # 5 minutes timeout per episode
     ),
 
     # ---------- MuZero policy ----------
     policy=dict(
         use_wandb=True,                  # enable wandb logging for monitoring
-        cuda=False,                      # CPU only for MBP
+        cuda=True,                      # CPU only for MBP
 
         # -------- neural network --------
         model=dict(
@@ -72,7 +74,7 @@ take5_muzero_config = dict(
         num_simulations=num_simulations,
         reanalyze_ratio=reanalyze_ratio,
         n_episode=n_episode,
-        eval_freq=100,                   # evaluate every 100 env steps (more frequent)
+        eval_freq=500,                  # evaluate every 500 env steps
         replay_buffer_size=int(5e5),     # transitions
         collector_env_num=collector_env_num,
         evaluator_env_num=evaluator_env_num,

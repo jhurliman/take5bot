@@ -148,7 +148,7 @@ def instrumented_train_muzero():
         logger.log_stage("imports", "Importing LZero training modules")
         from lzero.entry import train_muzero
         from lzero.worker import MuZeroCollector, MuZeroEvaluator
-        from lzero.policy import MuZeroPolicy
+        from lzero.policy.muzero import MuZeroPolicy
 
         logger.log_stage("env_setup", "Setting up environment")
 
@@ -184,7 +184,7 @@ def instrumented_train_muzero():
         MuZeroEvaluator.eval = logged_eval
 
         # Patch MuZeroPolicy
-        original_learn = MuZeroPolicy.learn
+        original_learn = MuZeroPolicy.learn_function
         def logged_learn(self, *args, **kwargs):
             iteration = getattr(self, '_iter_count', 0)
             logger.log_iteration(iteration, "Starting model learning")
@@ -196,7 +196,7 @@ def instrumented_train_muzero():
                 logger.log_error(f"Learning failed: {e}")
                 raise
 
-        MuZeroPolicy.learn = logged_learn
+        MuZeroPolicy.learn_function = logged_learn
 
         # Start main training
         logger.log_stage("training_start", "Entering main training loop")

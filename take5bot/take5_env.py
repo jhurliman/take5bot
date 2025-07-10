@@ -7,11 +7,13 @@ import gym
 from gym import spaces
 from lzero.envs.wrappers.lightzero_env_wrapper import LightZeroEnvWrapper
 from ding.envs import BaseEnvTimestep
+from easydict import EasyDict
 import openspiel_take5
 
 GAME_NAME = "take5"
 
 pyspiel.register_game(openspiel_take5.GAME_TYPE, openspiel_take5.TakeFiveGame)
+
 
 class Take5OpenSpielEnv(gym.Env):
     """
@@ -36,7 +38,9 @@ class Take5OpenSpielEnv(gym.Env):
         )
 
         # Add reward space for DI-engine compatibility
-        self.reward_space = spaces.Box(low=-float('inf'), high=float('inf'), shape=(1,), dtype=np.float32)
+        self.reward_space = spaces.Box(
+            low=-float("inf"), high=float("inf"), shape=(1,), dtype=np.float32
+        )
 
         self.current_player = 0
         self.players = list(range(self.game.num_players()))
@@ -51,6 +55,11 @@ class Take5OpenSpielEnv(gym.Env):
         self.current_player = 0
         self.pending_actions = {}
         self.timestep = 0
+
+        # Debug info
+        print(f"Environment reset. Initial player: {self.current_player}")
+        print(f"Game current player: {self.state.current_player()}")
+
         return self._get_observation()
 
     def step(self, action):
@@ -59,33 +68,115 @@ class Take5OpenSpielEnv(gym.Env):
             raise RuntimeError("Environment must be reset before stepping")
 
         if self.state.is_terminal():
-            raise RuntimeError("Cannot step in terminal state")
+            # Return current observation and done=True
+            obs = self._get_observation()
+            return (
+                obs,
+                0.0,
+                True,
+                {
+                    "legal_actions": [],
+                    "current_player": self.current_player,
+                    "is_terminal": True,
+                },
+            )
 
         # Handle different phases of the game
         current_player_id = self.state.current_player()
 
         if current_player_id == pyspiel.PlayerId.SIMULTANEOUS:
             # In select phase - collect actions from all players
+            legal_actions = self.state.legal_actions(self.current_player)
+            if action not in legal_actions:
+                print(
+                    f"Warning: Action {action} not in legal actions {legal_actions} for player {self.current_player}"
+                )
+                print(
+                    f"Player hand: {self.state._hands[self.current_player] if hasattr(self.state, '_hands') else 'N/A'}"
+                )
+                # Take the first legal action instead
+                if legal_actions:
+                    action = legal_actions[0]
+                    print(f"Using first legal action: {action}")
+                else:
+                    print("No legal actions available!")
+                    obs = self._get_observation()
+                    return (
+                        obs,
+                        0.0,
+                        True,
+                        {
+                            "legal_actions": [],
+                            "current_player": self.current_player,
+                            "is_terminal": True,
+                        },
+                    )
+
             self.pending_actions[self.current_player] = action
 
             # Check if we have all player actions
             if len(self.pending_actions) == self.game.num_players():
                 # Apply all simultaneous actions
-                joint_actions = [self.pending_actions[p] for p in range(self.game.num_players())]
+                joint_actions = [
+                    self.pending_actions[p] for p in range(self.game.num_players())
+                ]
+                # print(f"Applying joint actions: {joint_actions}")
                 self.state.apply_actions(joint_actions)
                 self.pending_actions = {}
+                # After applying simultaneous actions, update current player
+                if not self.state.is_terminal():
+                    new_current_player = self.state.current_player()
+                    if new_current_player == pyspiel.PlayerId.SIMULTANEOUS:
+                        self.current_player = 0
+                    elif new_current_player >= 0:
+                        self.current_player = new_current_player
             else:
                 # Move to next player for simultaneous action collection
-                self.current_player = (self.current_player + 1) % self.game.num_players()
+                self.current_player = (
+                    self.current_player + 1
+                ) % self.game.num_players()
 
-        elif current_player_id == self.current_player:
+        elif current_player_id >= 0:
             # Sequential action (choose_row phase)
-            self.state.apply_action(action)
+            if current_player_id == self.current_player:
+                legal_actions = self.state.legal_actions(self.current_player)
+                # print(f"Choose_row phase: player {self.current_player}, action {action}, legal: {legal_actions}")
+                if action not in legal_actions:
+                    print(
+                        f"Warning: Action {action} not in legal actions {legal_actions} for choose_row"
+                    )
+                    if legal_actions:
+                        action = legal_actions[0]
+                        print(f"Using first legal action: {action}")
+                    else:
+                        print("No legal actions in choose_row!")
+                        obs = self._get_observation()
+                        return (
+                            obs,
+                            0.0,
+                            True,
+                            {
+                                "legal_actions": [],
+                                "current_player": self.current_player,
+                                "is_terminal": True,
+                            },
+                        )
 
-        else:
-            # This shouldn't happen in a well-designed game
-            raise RuntimeError(f"Unexpected player state: current_player={self.current_player}, "
-                             f"game_current_player={current_player_id}")
+                self.state.apply_action(action)
+                # Update current player after action
+                if not self.state.is_terminal():
+                    new_current_player = self.state.current_player()
+                    if new_current_player == pyspiel.PlayerId.SIMULTANEOUS:
+                        self.current_player = 0
+                    elif new_current_player >= 0:
+                        self.current_player = new_current_player
+            else:
+                # This shouldn't happen - log and continue
+                print(
+                    f"Warning: Unexpected player state: current_player={self.current_player}, "
+                    f"game_current_player={current_player_id}"
+                )
+                self.current_player = current_player_id
 
         # Increment timestep
         self.timestep += 1
@@ -103,22 +194,20 @@ class Take5OpenSpielEnv(gym.Env):
             returns = self.state.returns()
             # For Take 5, lower score is better (penalty points)
             # Convert to reward where higher is better
-            reward = -returns[self.current_player]
-
-        # Update current player
-        if not done:
-            game_current_player = self.state.current_player()
-            if game_current_player == pyspiel.PlayerId.SIMULTANEOUS:
-                # Start collecting simultaneous actions from player 0
-                self.current_player = 0
-            elif game_current_player >= 0:
-                # Sequential phase
-                self.current_player = game_current_player
+            reward = (
+                -returns[self.current_player]
+                if self.current_player < len(returns)
+                else 0.0
+            )
 
         info = {
-            'legal_actions': self.state.legal_actions(self.current_player) if not done else [],
-            'current_player': self.current_player,
-            'is_terminal': done
+            "legal_actions": (
+                self.state.legal_actions(self.current_player)
+                if not done and self.current_player >= 0
+                else []
+            ),
+            "current_player": self.current_player,
+            "is_terminal": done,
         }
 
         return obs, reward, done, info
@@ -128,11 +217,21 @@ class Take5OpenSpielEnv(gym.Env):
         if self.state is None:
             raise RuntimeError("State is None")
 
-        # Get observation tensor for current player
-        obs_tensor = self.state.observation_tensor(self.current_player)
-        return np.array(obs_tensor, dtype=np.float32)
+        # Ensure current_player is valid
+        if self.current_player < 0 or self.current_player >= self.game.num_players():
+            self.current_player = 0
 
-    def render(self, mode='human'):
+        # Get observation tensor for current player
+        try:
+            obs_tensor = self.state.observation_tensor(self.current_player)
+            return np.array(obs_tensor, dtype=np.float32)
+        except Exception as e:
+            print(f"Error getting observation for player {self.current_player}: {e}")
+            # Fall back to player 0 observation
+            obs_tensor = self.state.observation_tensor(0)
+            return np.array(obs_tensor, dtype=np.float32)
+
+    def render(self, mode="human"):
         """Render the environment."""
         if self.state is not None:
             return str(self.state)
@@ -160,12 +259,21 @@ class Take5LightZeroEnv(LightZeroEnvWrapper):
         if cfg is None:
             cfg = {}
 
+        # Convert to EasyDict if it's a regular dict
+        if isinstance(cfg, dict) and not isinstance(cfg, EasyDict):
+            cfg = EasyDict(cfg)
+
         # Set required LightZero configuration defaults
-        cfg.setdefault('is_train', True)
-        cfg.setdefault('env_id', 'take5_openspiel')
-        cfg.setdefault('continuous', False)
-        cfg.setdefault('manually_discretization', False)
-        cfg.setdefault('each_dim_disc_size', 0)
+        if not hasattr(cfg, "is_train"):
+            cfg.is_train = True
+        if not hasattr(cfg, "env_id"):
+            cfg.env_id = "take5_openspiel"
+        if not hasattr(cfg, "continuous"):
+            cfg.continuous = False
+        if not hasattr(cfg, "manually_discretization"):
+            cfg.manually_discretization = False
+        if not hasattr(cfg, "each_dim_disc_size"):
+            cfg.each_dim_disc_size = 0
 
         super().__init__(base_env, cfg)
 
@@ -175,22 +283,70 @@ class Take5LightZeroEnv(LightZeroEnvWrapper):
 
     def reset(self):
         """Reset environment and return LightZero-compatible observation."""
-        obs = super().reset()
-        # Add timestep to observation
-        obs['timestep'] = self.env.timestep
-        return obs
+        obs = self.env.reset()
+
+        # Create proper action mask based on legal actions
+        action_mask = np.zeros(self.env.action_space.n, dtype=np.int8)
+        if self.env.state and not self.env.state.is_terminal():
+            legal_actions = self.env.state.legal_actions(self.env.current_player)
+            if legal_actions:
+                action_mask[legal_actions] = 1
+
+        # Create LightZero observation dict
+        lightzero_obs_dict = {
+            "observation": obs,
+            "action_mask": action_mask,
+            "to_play": self.to_play(),
+            "timestep": self.env.timestep,
+        }
+
+        # Reset episode return
+        self._eval_episode_return = 0.0
+
+        return lightzero_obs_dict
 
     def step(self, action: int):
         """Step environment and return LightZero-compatible timestep."""
-        timestep = super().step(action)
-        # Add timestep to observation
-        if hasattr(timestep, 'obs') and isinstance(timestep.obs, dict):
-            timestep.obs['timestep'] = self.env.timestep
-        return timestep
+        # Get observation before stepping
+        obs, rew, done, info = self.env.step(action)
+
+        # Create proper action mask based on legal actions
+        if done:
+            action_mask = np.zeros(self.env.action_space.n, dtype=np.int8)
+        else:
+            action_mask = np.zeros(self.env.action_space.n, dtype=np.int8)
+            legal_actions = info.get("legal_actions", [])
+            if legal_actions:
+                action_mask[legal_actions] = 1
+
+        # Create LightZero observation dict
+        lightzero_obs_dict = {
+            "observation": obs,
+            "action_mask": action_mask,
+            "to_play": self.to_play(),
+            "timestep": self.env.timestep,
+        }
+
+        # Update episode return
+        self._eval_episode_return += rew
+        if done:
+            info["eval_episode_return"] = self._eval_episode_return
+
+        return BaseEnvTimestep(lightzero_obs_dict, rew, done, info)
 
     def to_play(self) -> int:
-        """Return current player. -1 indicates single-player mode for LightZero."""
-        return -1  # LightZero treats -1 as "shared network" mode
+        """Return current player."""
+        if self.env.state is None or self.env.state.is_terminal():
+            return 0
+
+        # Return the actual current player from the game
+        game_current_player = self.env.state.current_player()
+        if game_current_player == pyspiel.PlayerId.SIMULTANEOUS:
+            return self.env.current_player
+        elif game_current_player >= 0:
+            return game_current_player
+        else:
+            return 0
 
     def seed(self, seed=None, dynamic_seed=None):
         """Override seed to handle DI-engine's call pattern."""
@@ -200,18 +356,22 @@ class Take5LightZeroEnv(LightZeroEnvWrapper):
     def create_collector_env_cfg(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Create collector environment configurations for parallel data collection."""
         import copy
+
         cfg_copy = copy.deepcopy(cfg)
-        collector_env_num = cfg_copy.pop('collector_env_num', 1)
+        collector_env_num = cfg_copy.pop("collector_env_num", 1)
         return [cfg_copy for _ in range(collector_env_num)]
 
     @staticmethod
     def create_evaluator_env_cfg(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Create evaluator environment configurations for parallel evaluation."""
         import copy
+
         cfg_copy = copy.deepcopy(cfg)
-        evaluator_env_num = cfg_copy.pop('evaluator_env_num', 1)
+        evaluator_env_num = cfg_copy.pop("evaluator_env_num", 1)
         return [cfg_copy for _ in range(evaluator_env_num)]
+
 
 # Register the environment
 from ding.utils import ENV_REGISTRY
-ENV_REGISTRY.register('take5_openspiel', Take5LightZeroEnv)
+
+ENV_REGISTRY.register("take5_openspiel", Take5LightZeroEnv)
