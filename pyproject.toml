@@ -1,0 +1,36 @@
+[build-system] # let uv know this is an installable project
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project] # PEP 621 metadata
+name = "take5-openspiel"
+version = "0.0.1"
+description = "OpenSpiel implementation of Take 5 (6 nimmt!) with LightZero/MuZero training hooks"
+authors = [{ name = "John Hurliman", email = "jhurliman@jhurliman.org" }]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.10"
+
+# ---------- runtime dependencies ----------
+dependencies = [
+    # OpenSpiel Python wheels (import name `open_spiel`, package name `open-spiel`)
+    "LightZero>=0.2.0",
+    "matplotlib>=3.10.3",
+    "numba>=0.61.2",
+    "open-spiel==1.6",
+    "pyecharts>=2.0.8",
+    "tensorboard>=2.19.0",
+    "torch>=2.0.0",
+    "transformers>=4.53.1",
+    "wandb>=0.19.0",
+]
+
+[project.optional-dependencies]
+
+dev = ["pytest>=8.0.0", "black>=24.3.0", "ruff>=0.4.0"]
+
+# ---------- uv‑specific tweaks (optional) ----------
+[tool.uv]
+
+[tool.setuptools]
+packages = ["take5bot"]
