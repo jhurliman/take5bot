@@ -22,7 +22,7 @@ reanalyze_ratio    = 0.25     # enable reanalysis for better learning
 # -------------- MAIN CONFIG (hyper‑params, replay, etc.) ---------------------
 take5_muzero_config = dict(
     exp_name=(
-        f'data_muzero/take5_muzero_'
+        f'data_muzero/take5_muzero_enhanced_'
         f'ns{num_simulations}_upc{update_per_collect}_rer{reanalyze_ratio}_seed0'
     ),
 
@@ -49,7 +49,7 @@ take5_muzero_config = dict(
 
         # -------- neural network --------
         model=dict(
-            observation_shape=124,       # 104‑bit hand + 4×5 row snapshot
+            observation_shape=253,       # Enhanced: 208 hand + 44 rows + 1 penalty
             action_space_size=108,       # 104 cards + 4 row‑choice actions
             model_type='mlp',
             lstm_hidden_size=256,

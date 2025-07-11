@@ -1,20 +1,20 @@
 # take5.py
 # OpenSpiel implementation of Wolfgang Kramer’s “Take 5!” (a.k.a. 6 nimmt!)
 #
-# Rules source: AMIGO rule book, item #18415 V1‑0818, pages 2‑6:contentReference[oaicite:8]{index=8}.
+# Rules source: https://www.amigo.games/wp-content/uploads/2024/08/18415-TakeNumber_Rules.pdf
 
 from typing import Dict, List, Tuple
 import random
-import numpy as np          # Only used for observation tensors
+import numpy as np  # Only used for observation tensors
 import pyspiel
 
 
 # ----------  Helper constants -------------------------------------------------
 
-NUM_CARDS = 104                       # 1 … 104
+NUM_CARDS = 104  # 1 … 104
 NUM_PLAYERS = 4
-MAX_ROW_LEN = 5                       # a 6th card triggers “Take 5”
-CARDS_PER_PLAYER = 10                 # one round only
+MAX_ROW_LEN = 5  # a 6th card triggers “Take 5”
+CARDS_PER_PLAYER = 10  # one round only
 ROWS = 4
 
 GAME_TYPE = pyspiel.GameType(
@@ -23,10 +23,10 @@ GAME_TYPE = pyspiel.GameType(
     dynamics=pyspiel.GameType.Dynamics.SEQUENTIAL,  # we emulate the simultaneous reveal inside the state
     chance_mode=pyspiel.GameType.ChanceMode.DETERMINISTIC,
     information=pyspiel.GameType.Information.IMPERFECT_INFORMATION,
-    utility=pyspiel.GameType.Utility.GENERAL_SUM,   # each player has independent score
+    utility=pyspiel.GameType.Utility.GENERAL_SUM,  # each player has independent score
     reward_model=pyspiel.GameType.RewardModel.TERMINAL,
-    max_num_players=NUM_PLAYERS,
-    min_num_players=NUM_PLAYERS,
+    max_num_players=10,
+    min_num_players=2,
     provides_information_state_tensor=True,
     provides_information_state_string=True,
     provides_observation_tensor=True,
@@ -36,51 +36,28 @@ GAME_INFO = pyspiel.GameInfo(
     num_distinct_actions=NUM_CARDS + ROWS,  # 104 cards (0‑103) + 4 “choose‑row” actions
     max_chance_outcomes=0,
     num_players=NUM_PLAYERS,
-    min_utility=-66,                       # hard bound from rule book
+    min_utility=-66,  # hard bound from rule book
     max_utility=0,
     utility_sum=0.0,
     max_game_length=CARDS_PER_PLAYER + CARDS_PER_PLAYER * NUM_PLAYERS * 2,  # loose bound
 )
 
-# tic-tac-toe example
-# _GAME_TYPE = pyspiel.GameType(
-#     short_name="python_tic_tac_toe",
-#     long_name="Python Tic-Tac-Toe",
-#     dynamics=pyspiel.GameType.Dynamics.SEQUENTIAL,
-#     chance_mode=pyspiel.GameType.ChanceMode.DETERMINISTIC,
-#     information=pyspiel.GameType.Information.PERFECT_INFORMATION,
-#     utility=pyspiel.GameType.Utility.ZERO_SUM,
-#     reward_model=pyspiel.GameType.RewardModel.TERMINAL,
-#     max_num_players=NUM_PLAYERS,
-#     min_num_players=NUM_PLAYERS,
-#     provides_information_state_string=True,
-#     provides_information_state_tensor=False,
-#     provides_observation_string=True,
-#     provides_observation_tensor=True,
-#     parameter_specification={})
-# _GAME_INFO = pyspiel.GameInfo(
-#     num_distinct_actions=_NUM_CELLS,
-#     max_chance_outcomes=0,
-#     num_players=2,
-#     min_utility=-1.0,
-#     max_utility=1.0,
-#     utility_sum=0.0,
-#     max_game_length=_NUM_CELLS)
 
 def bullheads(card: int) -> int:
     """Return the penalty (“bullhead”) value printed on a card."""
-    if card == 55:              # special – both 5 × 11 and printed as 7 heads
+    if card == 55:  # special – both 5 × 11 and printed as 7 heads
         return 7
-    if card % 11 == 0:          # multiple of 11
+    if card % 11 == 0:  # multiple of 11 (but not 55)
         return 5
-    if card % 10 == 0:          # multiple of 10 (but not 55)
+    if card % 10 == 0:  # multiple of 10
         return 3
-    if card % 5 == 0:           # multiple of 5 (but not 55 / 10‑multiple)
+    if card % 5 == 0:  # multiple of 5 (but not 55 / 10‑multiple)
         return 2
-    return 1                    # all others
+    return 1  # all others
 
 
 # ----------  OpenSpiel game & state classes -----------------------------------
+
 
 class TakeFiveGame(pyspiel.Game):
     """Game object shared by all states."""
@@ -92,7 +69,7 @@ class TakeFiveGame(pyspiel.Game):
         super().__init__(GAME_TYPE, GAME_INFO, params or dict())
 
     # Factory:
-    def new_initial_state(self) -> 'TakeFiveState':
+    def new_initial_state(self) -> "TakeFiveState":
         return TakeFiveState(self, self._num_players)
 
     # Pretty‑print:
@@ -101,21 +78,23 @@ class TakeFiveGame(pyspiel.Game):
 
 
 class TakeFiveState(pyspiel.State):
-    """A single round of Take 5."""
+    """A single round of Take 5."""
 
     def __init__(self, game: TakeFiveGame, num_players: int):
         super().__init__(game)
         self._num_players = num_players
-        self._rng = random.Random()                         # OpenSpiel sets seed globally
+        self._rng = random.Random()  # OpenSpiel sets seed globally
         self._deck = list(range(1, NUM_CARDS + 1))
         self._rng.shuffle(self._deck)
 
         # Hands
         self._hands: List[List[int]] = [
-            sorted(self._deck[i * CARDS_PER_PLAYER:(i + 1) * CARDS_PER_PLAYER])
+            sorted(self._deck[i * CARDS_PER_PLAYER : (i + 1) * CARDS_PER_PLAYER])
             for i in range(num_players)
         ]
-        self._deck_ptr = num_players * CARDS_PER_PLAYER    # remaining deck unused this round
+        self._deck_ptr = (
+            num_players * CARDS_PER_PLAYER
+        )  # remaining deck unused this round
 
         # Four initial rows – next four cards face‑up (rule p. 2):contentReference[oaicite:9]{index=9}
         self._rows: List[List[int]] = [[self._draw()] for _ in range(ROWS)]
@@ -124,13 +103,17 @@ class TakeFiveState(pyspiel.State):
         self._bull_piles: List[List[int]] = [[] for _ in range(num_players)]
 
         # Simultaneous selection buffer
-        self._chosen: Dict[int, int] = {}      # player → card
-        self._pending_sequence: List[Tuple[int, int]] = []  # (card, player) sorted ascending
+        self._chosen: Dict[int, int] = {}  # player → card
+        self._pending_sequence: List[Tuple[int, int]] = (
+            []
+        )  # (card, player) sorted ascending
 
         # Phase control
-        self._phase = "select"                 # "select", "resolve", "choose_row", "terminal"
-        self._current_player = 0               # only used in choose_row phase
-        self._row_choice_needed_for: int = -1  # card being placed when choose_row active
+        self._phase = "select"  # "select", "resolve", "choose_row", "terminal"
+        self._current_player = 0  # only used in choose_row phase
+        self._row_choice_needed_for: int = (
+            -1
+        )  # card being placed when choose_row active
 
     # ------------------------------------------------------------------ helpers
     def _draw(self) -> int:
@@ -143,7 +126,9 @@ class TakeFiveState(pyspiel.State):
 
     def _closest_row(self, card: int) -> int:
         """Return the row index that card must go to, or -1 if card < min(row ends)."""
-        candidates = [(card - r[-1], idx) for idx, r in enumerate(self._rows) if card > r[-1]]
+        candidates = [
+            (card - r[-1], idx) for idx, r in enumerate(self._rows) if card > r[-1]
+        ]
         if not candidates:
             return -1
         # least positive difference
@@ -191,7 +176,9 @@ class TakeFiveState(pyspiel.State):
             raise ValueError("Unexpected sequential action")
         row_idx = action - NUM_CARDS
         assert 0 <= row_idx < ROWS
-        self._take_row(self._current_player, row_idx, replacement_card=self._row_choice_needed_for)
+        self._take_row(
+            self._current_player, row_idx, replacement_card=self._row_choice_needed_for
+        )
         self._row_choice_needed_for = -1
         self._phase = "resolve"
         self._process_next_in_queue()
@@ -226,7 +213,7 @@ class TakeFiveState(pyspiel.State):
         if all(len(h) == 0 for h in self._hands):
             self._phase = "terminal"
         else:
-            self._phase = "select"      # next simultaneous reveal
+            self._phase = "select"  # next simultaneous reveal
 
     # ----------------------------------------------------------- RL interface
     def _collect_bullheads(self) -> List[int]:
@@ -245,26 +232,61 @@ class TakeFiveState(pyspiel.State):
     def is_terminal(self) -> bool:
         return self._phase == "terminal"
 
-    # ------------- Observation / information‑state (minimal but functional) --
+    # ---------- Observation / information‑state (enhanced with penalty values)
     def _hand_tensor(self, player: int) -> np.ndarray:
-        vec = np.zeros(NUM_CARDS, dtype=np.float32)
+        """Enhanced hand representation: [card_presence, card_penalties]"""
+        # Binary presence vector (104 elements)
+        presence = np.zeros(NUM_CARDS, dtype=np.float32)
         for c in self._hands[player]:
-            vec[c - 1] = 1.0
-        return vec
+            presence[c - 1] = 1.0
+
+        # Penalty values for cards in hand (104 elements)
+        penalties = np.zeros(NUM_CARDS, dtype=np.float32)
+        for c in self._hands[player]:
+            penalties[c - 1] = bullheads(c) / 7.0  # normalize by max penalty
+
+        return np.concatenate([presence, penalties])
 
     def _rows_tensor(self) -> np.ndarray:
-        out = np.zeros((ROWS, MAX_ROW_LEN), dtype=np.float32)
+        """Enhanced row representation: [card_numbers, card_penalties, row_totals]"""
+        # Card numbers (4 rows × 5 positions = 20 elements)
+        cards = np.zeros((ROWS, MAX_ROW_LEN), dtype=np.float32)
+        # Card penalties (4 rows × 5 positions = 20 elements)
+        penalties = np.zeros((ROWS, MAX_ROW_LEN), dtype=np.float32)
+        # Row penalty totals (4 elements)
+        row_totals = np.zeros(ROWS, dtype=np.float32)
+
         for r, row in enumerate(self._rows):
+            row_penalty_sum = 0
             for idx, card in enumerate(row):
-                out[r, idx] = card / NUM_CARDS   # scale roughly to [0,1]
-        return out.flatten()
+                cards[r, idx] = card / NUM_CARDS  # normalize card number
+                penalty = bullheads(card)
+                penalties[r, idx] = penalty / 7.0  # normalize penalty
+                row_penalty_sum += penalty
+            # normalize by max possible row penalty (5 cards × 7 bulls = 35)
+            row_totals[r] = row_penalty_sum / 35.0
+
+        return np.concatenate([cards.flatten(), penalties.flatten(), row_totals])
 
     def observation_tensor(self, player: int) -> np.ndarray:
-        return np.concatenate([self._hand_tensor(player),
-                               self._rows_tensor()])
+        """Enhanced observation: hand info + row info + penalty info"""
+        # 208 elements (104 presence + 104 penalties)
+        hand_info = self._hand_tensor(player)
+        # 44 elements (20 cards + 20 penalties + 4 totals)
+        row_info = self._rows_tensor()
+
+        # Add current penalty pile total for this player
+        current_penalty = sum(bullheads(c) for c in self._bull_piles[player])
+        # normalize by max penalty (66)
+        penalty_info = np.array([current_penalty / 66.0], dtype=np.float32)
+
+        # 253 elements total
+        return np.concatenate([hand_info, row_info, penalty_info])
 
     def observation_string(self, player: int) -> str:
-        s = f"Rows: {self._rows}\nHand: {self._hands[player]}\nBull pile: {self._bull_piles[player]}"
+        player_pile = self._bull_piles[player]
+        s = f"Rows: {self._rows}\nHand: {self._hands[player]}\n"
+        s += f"Bull pile: {player_pile}"
         return s
 
     # -------------------------------------------------------------- debugging
@@ -279,7 +301,8 @@ class TakeFiveState(pyspiel.State):
 
 
 class TakeFiveObserver(pyspiel.Observer):
-    """String observer for human debugging – not used by RL."""
+    """String observer for human debugging - not used by RL."""
+
     def __init__(self):
         super().__init__(iig_obs_type=None)
 

@@ -8,6 +8,7 @@ from gym import spaces
 from lzero.envs.wrappers.lightzero_env_wrapper import LightZeroEnvWrapper
 from ding.envs import BaseEnvTimestep
 from easydict import EasyDict
+from ding.utils import ENV_REGISTRY
 import openspiel_take5
 
 GAME_NAME = "take5"
@@ -46,8 +47,11 @@ class Take5OpenSpielEnv(gym.Env):
         self.players = list(range(self.game.num_players()))
 
         # Track simultaneous actions for the select phase
-        self.pending_actions = {}
+        self.pending_actions: dict[int, int] = {}
         self.timestep = 0
+
+        # Track penalty points for immediate rewards
+        self.previous_penalties = [0] * self.game.num_players()
 
     def reset(self):
         """Reset the environment and return initial observation."""
@@ -55,6 +59,9 @@ class Take5OpenSpielEnv(gym.Env):
         self.current_player = 0
         self.pending_actions = {}
         self.timestep = 0
+
+        # Reset penalty tracking for immediate rewards
+        self.previous_penalties = [0] * self.game.num_players()
 
         # Debug info
         print(f"Environment reset. Initial player: {self.current_player}")
@@ -189,16 +196,11 @@ class Take5OpenSpielEnv(gym.Env):
 
         # Calculate reward
         reward = 0.0
-        if done:
-            # Game is over, calculate final scores
-            returns = self.state.returns()
-            # For Take 5, lower score is better (penalty points)
-            # Convert to reward where higher is better
-            reward = (
-                -returns[self.current_player]
-                if self.current_player < len(returns)
-                else 0.0
-            )
+
+        # Add immediate penalty rewards if enabled
+        if not done:
+            reward += self._get_penalty_reward()
+            self._update_penalty_tracking()
 
         info = {
             "legal_actions": (
@@ -246,6 +248,31 @@ class Take5OpenSpielEnv(gym.Env):
         if seed is not None:
             np.random.seed(seed)
         return [seed]
+
+    def _get_penalty_reward(self):
+        """Calculate immediate penalty reward for current player."""
+        if self.state is None:
+            return 0.0
+
+        # Get current penalty totals for all players
+        current_penalties = self.state._collect_bullheads()
+
+        # Calculate immediate penalty reward for current player
+        penalty_diff = (
+            current_penalties[self.current_player]
+            - self.previous_penalties[self.current_player]
+        )
+
+        if penalty_diff > 0:
+            # Player collected penalty points - give negative reward
+            return -penalty_diff
+
+        return 0.0
+
+    def _update_penalty_tracking(self):
+        """Update penalty tracking for all players."""
+        if self.state is not None:
+            self.previous_penalties = self.state._collect_bullheads()
 
 
 class Take5LightZeroEnv(LightZeroEnvWrapper):
@@ -372,6 +399,4 @@ class Take5LightZeroEnv(LightZeroEnvWrapper):
 
 
 # Register the environment
-from ding.utils import ENV_REGISTRY
-
 ENV_REGISTRY.register("take5_openspiel", Take5LightZeroEnv)

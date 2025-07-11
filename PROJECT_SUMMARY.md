@@ -6,6 +6,12 @@ This project implements a MuZero-based AI agent for the Take 5 card game using t
 
 ## 🚀 Current Status
 
+### Latest Enhancement: Direct Penalty Observation
+- **✅ NEW**: Enhanced observation tensor with direct penalty values
+- **✅ Performance**: Model can now see card penalty values directly
+- **✅ Learning**: No longer needs to learn penalty rules through trial and error
+- **🎯 Benefit**: Should significantly improve learning speed and performance
+
 ### Training Status
 - **✅ FIXED**: All previous training issues resolved
 - **✅ Working**: Environment properly handles action masking and game logic
@@ -67,9 +73,21 @@ cuda = True                   # enabled for performance
 ```
 
 ### Environment Specs
-- **Observation Space**: 124-dimensional vector (104 hand + 20 table state)
+- **Observation Space**: 253-dimensional vector (enhanced with penalty values)
+  - Elements 0-103: Hand presence (binary)
+  - Elements 104-207: Hand penalties (normalized)
+  - Elements 208-227: Row card numbers (normalized)
+  - Elements 228-247: Row card penalties (normalized)
+  - Elements 248-251: Row penalty totals (normalized)
+  - Element 252: Player penalty pile (normalized)
 - **Action Space**: 108 actions (104 cards + 4 row choices)
 - **Game Rules**: Standard Take 5 with penalty minimization
+
+### Enhanced Observation Benefits
+- **Direct Penalty Values**: Model sees card penalty values directly
+- **Faster Learning**: No need to learn penalty rules through trial and error
+- **Better Strategy**: Can make informed decisions based on penalty costs
+- **Human-like Information**: Similar to how humans see bull symbols on cards
 
 ## 📊 Monitoring & Debugging
 

@@ -29,7 +29,7 @@ dependencies = [
 
 dev = ["pytest>=8.0.0", "black>=24.3.0", "ruff>=0.4.0"]
 
-# ---------- uv‑specific tweaks (optional) ----------
+# ---------- uv-specific tweaks (optional) ----------
 [tool.uv]
 
 [tool.setuptools]
