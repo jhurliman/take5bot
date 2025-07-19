@@ -107,7 +107,7 @@ def run_monitored_training():
         # Import and load config
         monitor.log("Loading configuration")
         try:
-            from take5_muzero_config import main_config, create_config, max_env_step
+            from take5_unizero_config import main_config, create_config, max_env_step
             monitor.log(f"Config loaded - Max steps: {max_env_step}")
             monitor.log(f"CUDA: {main_config.policy.cuda}")
             monitor.log(f"Batch size: {main_config.policy.batch_size}")
@@ -120,7 +120,7 @@ def run_monitored_training():
         # Import training function
         monitor.log("Importing training modules")
         try:
-            from lzero.entry import train_muzero
+            from lzero.entry import train_unizero
             monitor.log("LZero modules imported successfully")
         except Exception as e:
             monitor.log(f"Import failed: {e}")
@@ -132,7 +132,7 @@ def run_monitored_training():
         training_start = time.time()
 
         # Call the training function
-        train_muzero(
+        train_unizero(
             [main_config, create_config],
             seed=0,
             model_path=main_config.policy.model_path,
