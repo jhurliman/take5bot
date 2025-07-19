@@ -1,7 +1,6 @@
 from easydict import EasyDict
 import sys
 import os
-import torch
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from training_hooks import create_training_hooks
 
@@ -21,9 +20,9 @@ reanalyze_ratio    = 0.25     # enable reanalysis for better learning
 # ==============================================================
 
 # -------------- MAIN CONFIG (hyper‑params, replay, etc.) ---------------------
-take5_unizero_config = dict(
+take5_muzero_config = dict(
     exp_name=(
-        f'data_unizero/take5_unizero_enhanced_'
+        f'data_muzero/take5_muzero_enhanced_'
         f'ns{num_simulations}_upc{update_per_collect}_rer{reanalyze_ratio}_seed0'
     ),
 
@@ -43,7 +42,7 @@ take5_unizero_config = dict(
         timeout=300,                     # 5 minutes timeout per episode
     ),
 
-    # ---------- UniZero policy ----------
+    # ---------- MuZero policy ----------
     policy=dict(
         use_wandb=True,                  # enable wandb logging for monitoring
         cuda=True,                      # CPU only for MBP
@@ -58,34 +57,6 @@ take5_unizero_config = dict(
             self_supervised_learning_loss=False,
             discrete_action_encoding_type='one_hot',
             norm_type='BN',
-            # UniZero specific world model configuration
-            world_model_cfg=dict(
-                obs_type='vector',              # vector observations for Take 5
-                embed_dim=256,                  # embedding dimension
-                group_size=8,                   # group size for normalization
-                max_blocks=50,                  # max blocks per episode
-                max_tokens=100,                 # max_tokens = 2 * max_blocks
-                tokens_per_block=2,             # obs + action tokens per block
-                context_length=100,             # context length for transformer
-                num_layers=8,                   # number of transformer layers
-                num_heads=8,                    # number of attention heads
-                support_size=101,               # support size for value/reward heads
-                continuous_action_space=False,  # discrete action space
-                rotary_emb=False,               # use absolute position encoding
-                policy_entropy_weight=0.0,      # policy entropy weight
-                gamma=0.99,                     # discount factor
-                device='cuda' if torch.cuda.is_available() else 'cpu',
-                analysis_sim_norm=False,        # disable analysis hooks
-                analysis_dormant_ratio=False,   # disable dormant ratio analysis
-                dormant_threshold=0.025,        # dormant neuron threshold
-                predict_latent_loss_type='cross_entropy',
-                latent_recon_loss_weight=0.0,   # latent reconstruction loss weight
-                perceptual_loss_weight=0.0,     # perceptual loss weight
-                final_norm_option_in_encoder='LayerNorm',
-                env_num=collector_env_num,      # number of parallel environments
-                num_simulations=num_simulations,  # MCTS simulations
-                max_cache_size=1000,            # cache size for KV caching
-            ),
         ),
         model_path=None,
 
@@ -110,23 +81,23 @@ take5_unizero_config = dict(
     ),
 )
 
-take5_unizero_config = EasyDict(take5_unizero_config)
-main_config = take5_unizero_config
+take5_muzero_config = EasyDict(take5_muzero_config)
+main_config = take5_muzero_config
 
 # -------------- CREATE CONFIG (env + policy factory) ------------------------
-take5_unizero_create_config = dict(
+take5_muzero_create_config = dict(
     env=dict(
         type='take5_openspiel',
         import_names=['take5_env'],         # path to your wrapper module
     ),
     env_manager=dict(type='subprocess'),
     policy=dict(
-        type='unizero',
-        import_names=['lzero.policy.unizero'],
+        type='muzero',
+        import_names=['lzero.policy.muzero'],
     ),
 )
-take5_unizero_create_config = EasyDict(take5_unizero_create_config)
-create_config = take5_unizero_create_config
+take5_muzero_create_config = EasyDict(take5_muzero_create_config)
+create_config = take5_muzero_create_config
 
 # ------------------------- launch helper ------------------------------------
 if __name__ == "__main__":
@@ -135,7 +106,7 @@ if __name__ == "__main__":
     hooks = create_training_hooks("training_debug")
 
     # Log initial configuration
-    hooks.logger.log_activity("Starting Take 5 UniZero training with debugging")
+    hooks.logger.log_activity("Starting Take 5 MuZero training with debugging")
     hooks.logger.log_activity(f"Collector envs: {collector_env_num}")
     hooks.logger.log_activity(f"Evaluator envs: {evaluator_env_num}")
     hooks.logger.log_activity(f"MCTS simulations: {num_simulations}")
@@ -147,24 +118,24 @@ if __name__ == "__main__":
     hooks.call_hooks('before_run', config=main_config)
 
     try:
-        from lzero.entry import train_unizero
+        from lzero.entry import train_muzero
 
         # Wrap the training function to add our hooks
-        original_train = train_unizero
+        original_train = train_muzero
 
-        def wrapped_train_unizero(*args, **kwargs):
-            hooks.logger.log_activity("Calling train_unizero function")
+        def wrapped_train_muzero(*args, **kwargs):
+            hooks.logger.log_activity("Calling train_muzero function")
 
             # Add iteration hooks by patching the training loop
             # This is a simple approach - we'll log at key points
             result = original_train(*args, **kwargs)
 
-            hooks.logger.log_activity("train_unizero function completed")
+            hooks.logger.log_activity("train_muzero function completed")
             return result
 
         # Start training with hooks
         hooks.logger.log_activity("Entering main training loop")
-        wrapped_train_unizero(
+        wrapped_train_muzero(
             [main_config, create_config],
             seed=0,
             model_path=main_config.policy.model_path,

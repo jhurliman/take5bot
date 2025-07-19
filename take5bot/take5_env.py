@@ -4,11 +4,19 @@ from typing import Any, Dict, List
 import numpy as np
 import pyspiel
 import gym
+import os
+import sys
 from gym import spaces
 from lzero.envs.wrappers.lightzero_env_wrapper import LightZeroEnvWrapper
 from ding.envs import BaseEnvTimestep
 from easydict import EasyDict
 from ding.utils import ENV_REGISTRY
+
+# Add the project root to the Python path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(current_dir)
+sys.path.append(os.path.join(current_dir, 'take5bot'))
+
 import openspiel_take5
 
 GAME_NAME = "take5"

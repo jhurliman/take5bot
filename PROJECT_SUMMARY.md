@@ -41,7 +41,8 @@ This project implements a MuZero-based AI agent for the Take 5 card game using t
 #### 1. Game Environment (`take5bot/`)
 - **`openspiel_take5.py`** - OpenSpiel game implementation
 - **`take5_env.py`** - LightZero environment wrapper
-- **`take5_unizero_config.py`** - Training configuration
+- **`take5_muzero_config.py`** - Training configuration
+- **`take5_unizero_config.py`** - Experimental UniZero training configuration, incomplete
 
 #### 2. Training System
 - **`train_monitored.py`** - Instrumented training with freeze detection
@@ -214,7 +215,7 @@ take5bot/
 ├── take5bot/                    # Core implementation
 │   ├── openspiel_take5.py       # Game rules
 │   ├── take5_env.py             # Environment wrapper
-│   ├── take5_unizero_config.py  # Training config
+│   ├── take5_muzero_config.py  # Training config
 │   └── __init__.py
 │
 ├── training_debug/              # Debug logs

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Simple monitored training script for Take 5 MuZero with basic freeze detection.
+Simple monitored training script for Take 5 with basic freeze detection.
 This script wraps the original training with minimal instrumentation to identify freezes.
 """
 
@@ -102,12 +102,12 @@ def run_monitored_training():
     monitor = FreezeDetectionLogger()
 
     try:
-        monitor.log("Starting Take 5 MuZero training")
+        monitor.log("Starting Take 5 training")
 
         # Import and load config
         monitor.log("Loading configuration")
         try:
-            from take5_unizero_config import main_config, create_config, max_env_step
+            from take5_muzero_config import main_config, create_config, max_env_step
             monitor.log(f"Config loaded - Max steps: {max_env_step}")
             monitor.log(f"CUDA: {main_config.policy.cuda}")
             monitor.log(f"Batch size: {main_config.policy.batch_size}")
@@ -126,10 +126,6 @@ def run_monitored_training():
             monitor.log(f"Import failed: {e}")
             raise
 
-        # Add periodic logging during training
-        monitor.log("Setting up training monitoring")
-
-        # Simple approach: just log before and after train_muzero call
         monitor.log("Entering main training function")
 
         # Record start of training
@@ -174,7 +170,7 @@ def main():
     """Main entry point with user-friendly output."""
 
     print("=" * 60)
-    print("TAKE 5 MUZERO TRAINING WITH FREEZE MONITORING")
+    print("TAKE 5 TRAINING WITH FREEZE MONITORING")
     print("=" * 60)
     print("This script will:")
     print("- Monitor training for freezes (3-minute threshold)")

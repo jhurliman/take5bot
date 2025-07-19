@@ -216,6 +216,7 @@ logs/
 runs/
 wandb/
 data_muzero/
+data_unizero/
 
 # CUDA profiler output
 *.prof
