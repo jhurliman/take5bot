@@ -6,7 +6,7 @@
 from typing import Dict, List, Tuple
 import random
 import numpy as np  # Only used for observation tensors
-import pyspiel
+import pyspiel  # type: ignore
 
 
 # ----------  Helper constants -------------------------------------------------
@@ -39,7 +39,8 @@ GAME_INFO = pyspiel.GameInfo(
     min_utility=-66,  # hard bound from rule book
     max_utility=0,
     utility_sum=0.0,
-    max_game_length=CARDS_PER_PLAYER + CARDS_PER_PLAYER * NUM_PLAYERS * 2,  # loose bound
+    max_game_length=CARDS_PER_PLAYER
+    + CARDS_PER_PLAYER * NUM_PLAYERS * 2,  # loose bound
 )
 
 

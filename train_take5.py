@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-Simple monitored training script for Take 5 with basic freeze detection.
-This script wraps the original training with minimal instrumentation to identify freezes.
+Lightweight training script for Take 5 using MuZero.
 """
 
 import sys
@@ -16,22 +15,19 @@ sys.path.append(current_dir)
 sys.path.append(os.path.join(current_dir, "take5bot"))
 
 
-# Simple freeze detection logger
-class FreezeDetectionLogger:
-    """Lightweight freeze detection for training."""
+class TrainingLogger:
+    """Lightweight training logger."""
 
-    def __init__(self, freeze_threshold=180):  # 3 minutes
+    def __init__(self):
         self.start_time = time.time()
         self.last_activity = time.time()
-        self.freeze_threshold = freeze_threshold
-        self.monitoring = True
 
         # Setup logging
         log_dir = "training_debug"
         os.makedirs(log_dir, exist_ok=True)
 
         log_file = os.path.join(
-            log_dir, f"freeze_monitor_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+            log_dir, f"training_monitor_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
         )
 
         # Configure logging
@@ -50,16 +46,12 @@ class FreezeDetectionLogger:
         self.logger.info(f"[{elapsed:6.1f}s] {message}")
 
     def stop(self):
-        """Stop monitoring."""
-        self.monitoring = False
         total_time = time.time() - self.start_time
         self.log(f"Training session ended (total: {total_time:.1f}s)")
 
 
 def run_monitored_training():
-    """Run training with freeze monitoring."""
-
-    monitor = FreezeDetectionLogger()
+    monitor = TrainingLogger()
 
     try:
         monitor.log("Starting Take 5 training")
