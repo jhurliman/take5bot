@@ -7,17 +7,17 @@ import gym
 import os
 import sys
 from gym import spaces
-from lzero.envs.wrappers.lightzero_env_wrapper import LightZeroEnvWrapper
-from ding.envs import BaseEnvTimestep
-from easydict import EasyDict
-from ding.utils import ENV_REGISTRY
+from lzero.envs.wrappers.lightzero_env_wrapper import LightZeroEnvWrapper  # type: ignore
+from ding.envs import BaseEnvTimestep  # type: ignore
+from easydict import EasyDict  # type: ignore
+from ding.utils import ENV_REGISTRY  # type: ignore
 
 # Add the project root to the Python path
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(current_dir)
 sys.path.append(os.path.join(current_dir, 'take5bot'))
 
-import openspiel_take5
+import openspiel_take5  # type: ignore  # noqa: E402
 
 GAME_NAME = "take5"
 
@@ -286,13 +286,13 @@ class Take5OpenSpielEnv(gym.Env):
 class Take5LightZeroEnv(LightZeroEnvWrapper):
     """LightZero-compatible wrapper around the OpenSpiel Take 5 game."""
 
-    def __init__(self, cfg: Dict[str, Any] | None = None):
+    def __init__(self, cfg: EasyDict | Dict[str, Any] | None = None):
         # Create the base OpenSpiel environment
         base_env = Take5OpenSpielEnv(cfg)
 
         # Initialize with required LightZero config
         if cfg is None:
-            cfg = {}
+            cfg = EasyDict({})
 
         # Convert to EasyDict if it's a regular dict
         if isinstance(cfg, dict) and not isinstance(cfg, EasyDict):

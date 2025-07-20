@@ -14,109 +14,48 @@ Uses OpenSpiel and LightZero to play Take 5 and learn via self-play with GPU acc
    cd take5bot
    ```
 
+2. **Create a virtual environment:**
+   ```bash
+   # Install uv (https://github.com/astral-sh/uv) if not already installed
+   uv venv --python=python3.10
+   source .venv/bin/activate
+   ```
+
 2. **Install dependencies:**
    ```bash
-   # For CPU-only training
-   pip install -e ".[train]"
-   
-   # For CUDA-enabled training (Linux/Windows)
-   pip install -e ".[train-cuda]" --index-url https://download.pytorch.org/whl/cu121
+   uv sync
    ```
-
-3. **Verify installation:**
-   ```bash
-   python verify_setup.py
-   ```
-
-### CUDA Setup (GPU Training)
-
-For GPU-accelerated training on Linux and Windows:
-
-#### Automated Setup
-```bash
-# Linux
-./setup_cuda.sh
-
-# Windows
-setup_cuda.bat
-
-# Cross-platform Python script
-python setup_cuda.py
-```
-
-#### Manual Setup
-```bash
-# Install CUDA PyTorch (replace cu121 with your CUDA version)
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-
-# Install training dependencies
-pip install "LightZero>=0.2.0"
-```
-
-### Prerequisites for CUDA
-- NVIDIA GPU with compute capability 3.5+
-- NVIDIA GPU drivers (latest recommended)
-- CUDA Toolkit 11.8 or 12.1+ (optional, PyTorch includes CUDA runtime)
 
 ### Usage
 
-```python
-import torch
-from take5bot import YourAgent
+- **Train a model:**
+  ```bash
+  python ./train_take5.py
+  ```
 
-# Automatically use GPU if available
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f"Using device: {device}")
+- **Play Take 5:**
+  ```bash
+  python ./play_take5.py
+  ```
 
-# Initialize your agent
-agent = YourAgent().to(device)
+## 🏗️ Architecture
 
-# Train with GPU acceleration
-agent.train()
-```
+### Core Components
 
-## Documentation
+- **`openspiel_take5.py`** - OpenSpiel game implementation
+- **`take5_env.py`** - LightZero environment wrapper
+- **`take5_muzero_config.py`** - Training configuration
 
-- [CUDA Setup Guide](CUDA_SETUP.md) - Detailed CUDA installation instructions
-- [Training Guide](docs/training.md) - How to train agents
-- [API Reference](docs/api.md) - Code documentation
-
-## Project Structure
-
-```
-take5bot/
-├── setup_cuda.py          # Cross-platform CUDA setup script
-├── setup_cuda.sh           # Linux CUDA setup script
-├── setup_cuda.bat          # Windows CUDA setup script
-├── verify_setup.py         # Installation verification
-├── CUDA_SETUP.md          # Detailed CUDA setup guide
-├── pyproject.toml         # Project configuration
-└── src/                   # Source code
-```
-
-## Features
-
-- **OpenSpiel Integration**: Standard Take 5 game implementation
-- **LightZero Training**: State-of-the-art reinforcement learning
-- **CUDA Support**: GPU-accelerated training on Linux and Windows
-- **Cross-Platform**: Works on Linux, Windows, and macOS
-- **Easy Setup**: Automated installation scripts
-
-## Requirements
-
-- Python 3.10+
-- PyTorch 2.0+
-- OpenSpiel 1.2+
-- LightZero 0.2+
-- CUDA 11.8+ (for GPU support)
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run tests: `pytest`
-5. Submit a pull request
+### Environment Specs
+- **Observation Space**: 253-dimensional vector
+  - Elements 0-103: Hand presence (binary)
+  - Elements 104-207: Penalty (bull point) values for cards present in hand (normalized)
+  - Elements 208-227: Row card numbers (normalized)
+  - Elements 228-247: Row card penalties (normalized)
+  - Elements 248-251: Row penalty totals (normalized)
+  - Element 252: Player penalty pile total (normalized)
+- **Action Space**: 108 actions (104 cards + 4 row choices)
+- **Game Rules**: Standard Take 5 with penalty minimization
 
 ## License
 
