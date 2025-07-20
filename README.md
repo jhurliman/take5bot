@@ -30,6 +30,7 @@ Uses OpenSpiel and LightZero to play Take 5 and learn via self-play with GPU acc
 
 - **Train a model:**
   ```bash
+  wandb login
   python ./train_take5.py
   ```
 
@@ -54,8 +55,8 @@ Uses OpenSpiel and LightZero to play Take 5 and learn via self-play with GPU acc
   - Elements 228-247: Row card penalties (normalized)
   - Elements 248-251: Row penalty totals (normalized)
   - Element 252: Player penalty pile total (normalized)
-- **Action Space**: 108 actions (104 cards + 4 row choices)
-- **Game Rules**: Standard Take 5 with penalty minimization
+- **Action Space**: 108 actions (104 cards, 4 row choices when playing a low card)
+- **Game Rules**: Standard Take 5 <https://www.amigo.games/wp-content/uploads/2024/08/18415-TakeNumber_Rules.pdf>
 
 ## License
 
