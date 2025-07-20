@@ -11,14 +11,13 @@ import numpy as np
 import torch
 from typing import List, Dict, Tuple, Optional
 import glob
-from pathlib import Path
 
 # Add the project root to the Python path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import take5bot.take5_env as take5_env
-from lzero.policy.muzero import MuZeroPolicy
-from easydict import EasyDict
+import take5bot.take5_env as take5_env  # noqa: E402
+from lzero.policy.muzero import MuZeroPolicy  # type: ignore  # noqa: E402
+from easydict import EasyDict  # type: ignore  # noqa: E402
 
 
 class Take5AIPlayer:
