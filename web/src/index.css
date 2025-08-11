@@ -1,0 +1,17 @@
+/* Tailwind CSS v4: use the single entrypoint instead of layer subpaths */
+@import "tailwindcss";
+html, body, #root { height: 100%; }
+
+.card-surface {
+  transition: transform .08s ease, box-shadow .12s ease;
+}
+.card-surface:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.6),
+    inset 0 -2px 4px rgba(0,0,0,.1),
+    0 4px 10px rgba(0,0,0,.28);
+}
+.number-face {
+  line-height: 1;
+}
