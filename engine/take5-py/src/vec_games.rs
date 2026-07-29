@@ -74,7 +74,9 @@ impl VecGames {
             .collect::<PyResult<_>>()?;
         let policy_seats: Vec<usize> = (0..num_players).filter(|&i| parsed[i].is_none()).collect();
         if policy_seats.is_empty() {
-            return Err(PyValueError::new_err("at least one seat must be None (policy)"));
+            return Err(PyValueError::new_err(
+                "at least one seat must be None (policy)",
+            ));
         }
 
         let mut seed_stream = SplitMix64::new(seed);

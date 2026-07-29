@@ -5,10 +5,10 @@ mod vec_games;
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use vec_games::VecGames;
 use take5_core::bots::BotSpec;
 use take5_core::cards::{set_contains, set_insert, CardSet, NUM_CARDS};
 use take5_core::{arena, encode_observation, Phase, OBS_LEN};
+use vec_games::VecGames;
 
 fn to_set(cards: &[u8]) -> PyResult<CardSet> {
     let mut set: CardSet = 0;
