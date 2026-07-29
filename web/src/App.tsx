@@ -332,6 +332,7 @@ export default function Take5App() {
         return () => clearTimeout(t);
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.phase, state.pendingPlacements]);
 
   function onChooseRow(idx: number) {
