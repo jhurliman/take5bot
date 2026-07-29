@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = ["take5-core", "take5-py"]
+
+[profile.release]
+lto = true
+codegen-units = 1

@@ -1,0 +1,37 @@
+name: engine
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: engine
+      - run: cargo fmt --all --check --manifest-path engine/Cargo.toml
+      - run: cargo clippy --all-targets --manifest-path engine/Cargo.toml -- -D warnings
+      - run: cargo test --manifest-path engine/Cargo.toml
+
+  parity:
+    name: parity vs legacy OpenSpiel implementation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: engine
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install open_spiel numpy
+      - run: ./scripts/build_engine.sh
+      - run: python tests/parity_check.py --games 150
