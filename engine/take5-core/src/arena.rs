@@ -34,7 +34,7 @@ pub fn run_match_range(
 
         // Rotate seats: seat i hosts spec (i + g) % n.
         let seat_bots: Vec<usize> = (0..n).map(|i| (i + g as usize) % n).collect();
-        let mut bots: Vec<Box<dyn crate::bots::Bot>> =
+        let mut bots: Vec<Box<dyn crate::bots::Bot + Send + Sync>> =
             seat_bots.iter().map(|&b| specs[b].build()).collect();
 
         let mut game = Game::deal(n, deal_seed).expect("valid player count");

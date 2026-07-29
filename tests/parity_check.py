@@ -21,9 +21,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "py"))
 sys.path.insert(0, os.path.join(ROOT, "take5bot"))
 
-import take5_engine  # noqa: E402
-import openspiel_take5  # noqa: E402
-import pyspiel  # noqa: E402
+import openspiel_take5
+import pyspiel
+import take5_engine
 
 
 def check(cond: bool, msg: str, seed: int, step: int) -> None:
@@ -39,7 +39,10 @@ def compare(py_state, rust, seed: int, step: int) -> None:
     py_pen = py_state._collect_bullheads()
     rust_pen = rust.penalties()
     check(
-        py_pen == list(rust_pen), f"penalties differ: {py_pen} vs {rust_pen}", seed, step
+        py_pen == list(rust_pen),
+        f"penalties differ: {py_pen} vs {rust_pen}",
+        seed,
+        step,
     )
 
     py_hands = py_state._hands
@@ -88,7 +91,9 @@ def run_one_game(seed: int) -> int:
                 steps,
             )
             ctx = rust.choose_row_context()
-            check(ctx[0] == current, f"chooser: py={current} rust={ctx[0]}", seed, steps)
+            check(
+                ctx[0] == current, f"chooser: py={current} rust={ctx[0]}", seed, steps
+            )
             check(
                 ctx[1] == py_state._row_choice_needed_for,
                 f"forced card: py={py_state._row_choice_needed_for} rust={ctx[1]}",

@@ -17,9 +17,11 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "py"))
+sys.path.insert(
+    0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "py")
+)
 
-import take5_engine  # noqa: E402
+import take5_engine
 
 
 def mean_ci95(values: list[float]) -> tuple[float, float]:
@@ -66,7 +68,9 @@ def main() -> int:
     )
     print(f"{'bot':<12} {'mean pen':>9} {'95% ci':>8} {'win rate':>9}")
     print("-" * 42)
-    order = sorted(range(len(specs)), key=lambda b: sum(per_bot_pens[b]) / len(per_bot_pens[b]))
+    order = sorted(
+        range(len(specs)), key=lambda b: sum(per_bot_pens[b]) / len(per_bot_pens[b])
+    )
     for b in order:
         mean, ci = mean_ci95(per_bot_pens[b])
         win = per_bot_wins[b] / args.games
