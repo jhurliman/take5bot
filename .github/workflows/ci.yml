@@ -18,10 +18,10 @@ jobs:
         working-directory: web
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: 'npm'
@@ -35,18 +35,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.10'
           cache: 'pip'
+          cache-dependency-path: pyproject.toml
 
-      - name: Install project (with dev extras)
+      # The smoke test only needs pyspiel + numpy, so skip the heavy
+      # training dependencies (torch, transformers, LightZero, ...).
+      - name: Install smoke-test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install .[dev]
+          pip install 'open-spiel==1.6' numpy ruff black
+          pip install --no-deps .
 
       - name: Smoke test import & game registration
         run: |
@@ -60,18 +64,8 @@ jobs:
 
       - name: Style (ruff) check (non-blocking)
         continue-on-error: true
-        run: |
-          if python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('ruff') else 1)"; then
-            ruff check .
-          else
-            echo 'ruff not installed; skipping.'
-          fi
+        run: ruff check .
 
       - name: Black formatting check (non-blocking)
         continue-on-error: true
-        run: |
-          if python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('black') else 1)"; then
-            black --check .
-          else
-            echo 'black not installed; skipping.'
-          fi
+        run: black --check .
