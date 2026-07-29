@@ -3,11 +3,10 @@
 #
 # Rules source: https://www.amigo.games/wp-content/uploads/2024/08/18415-TakeNumber_Rules.pdf
 
-from typing import Dict, List, Tuple
 import random
+
 import numpy as np  # Only used for observation tensors
 import pyspiel  # type: ignore
-
 
 # ----------  Helper constants -------------------------------------------------
 
@@ -63,7 +62,7 @@ def bullheads(card: int) -> int:
 class TakeFiveGame(pyspiel.Game):
     """Game object shared by all states."""
 
-    def __init__(self, params: Dict[str, str] | None = None):
+    def __init__(self, params: dict[str, str] | None = None):
         params = params or {}
         # self._num_players = int(params.get("players", 4))   # 2-10 in the box rules
         self._num_players = NUM_PLAYERS
@@ -89,7 +88,7 @@ class TakeFiveState(pyspiel.State):
         self._rng.shuffle(self._deck)
 
         # Hands
-        self._hands: List[List[int]] = [
+        self._hands: list[list[int]] = [
             sorted(self._deck[i * CARDS_PER_PLAYER : (i + 1) * CARDS_PER_PLAYER])
             for i in range(num_players)
         ]
@@ -98,14 +97,14 @@ class TakeFiveState(pyspiel.State):
         )  # remaining deck unused this round
 
         # Four initial rows – next four cards face‑up (rule p. 2):contentReference[oaicite:9]{index=9}
-        self._rows: List[List[int]] = [[self._draw()] for _ in range(ROWS)]
+        self._rows: list[list[int]] = [[self._draw()] for _ in range(ROWS)]
 
         # Penalty piles per player
-        self._bull_piles: List[List[int]] = [[] for _ in range(num_players)]
+        self._bull_piles: list[list[int]] = [[] for _ in range(num_players)]
 
         # Simultaneous selection buffer
-        self._chosen: Dict[int, int] = {}  # player → card
-        self._pending_sequence: List[Tuple[int, int]] = (
+        self._chosen: dict[int, int] = {}  # player → card
+        self._pending_sequence: list[tuple[int, int]] = (
             []
         )  # (card, player) sorted ascending
 
@@ -122,7 +121,7 @@ class TakeFiveState(pyspiel.State):
         self._deck_ptr += 1
         return card
 
-    def _row_penalty(self, row: List[int]) -> int:
+    def _row_penalty(self, row: list[int]) -> int:
         return sum(bullheads(c) for c in row)
 
     def _closest_row(self, card: int) -> int:
@@ -146,7 +145,7 @@ class TakeFiveState(pyspiel.State):
         else:  # resolving – environment acting
             return pyspiel.PlayerId.CHANCE  # treated as chance to keep MCTS happy
 
-    def legal_actions(self, player: int) -> List[int]:
+    def legal_actions(self, player: int) -> list[int]:
         if self._phase == "select":
             # card ids are 0–103; action is card‑1
             return [c - 1 for c in self._hands[player]]
@@ -155,7 +154,7 @@ class TakeFiveState(pyspiel.State):
             return list(range(NUM_CARDS, NUM_CARDS + ROWS))
         return []
 
-    def apply_actions(self, joint_actions: List[int]):
+    def apply_actions(self, joint_actions: list[int]):
         """Only called during simultaneous select phase."""
         assert self._phase == "select"
         for p, act in enumerate(joint_actions):
@@ -217,14 +216,14 @@ class TakeFiveState(pyspiel.State):
             self._phase = "select"  # next simultaneous reveal
 
     # ----------------------------------------------------------- RL interface
-    def _collect_bullheads(self) -> List[int]:
+    def _collect_bullheads(self) -> list[int]:
         return [sum(bullheads(c) for c in pile) for pile in self._bull_piles]
 
-    def rewards(self) -> List[float]:
+    def rewards(self) -> list[float]:
         # sparse – only at terminal
         return [0.0] * self._num_players
 
-    def returns(self) -> List[float]:
+    def returns(self) -> list[float]:
         if not self.is_terminal():
             return [0.0] * self._num_players
         # We *maximize* utility in OpenSpiel, so return negative penalty

@@ -1,7 +1,8 @@
-from easydict import EasyDict  # type: ignore
-import sys
 import os
+import sys
+
 import torch
+from easydict import EasyDict  # type: ignore
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
