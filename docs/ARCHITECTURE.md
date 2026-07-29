@@ -66,7 +66,9 @@ Heuristic-only games run at ~1.1M games/s on a desktop CPU; `mc:64` plays
 - [x] M2: Arena + baselines including determinized MC rollout search
 - [x] M3: PPO self-play training (`training/train_ppo.py` on a vectorized
       `VecGames` env with mixed self-play/bot opponent pools;
-      `training/eval_arena.py` evaluates checkpoints)
+      `training/eval_arena.py` evaluates checkpoints). The raw policy beats
+      greedy (11.6 vs 13.2 mean penalty over 5k games) and matches mc:16;
+      mc:64 still wins — that gap is M4/M5's job (league + search).
 - [ ] M4: League training + belief head (opponent hand prediction)
 - [ ] M5: Belief-guided search; WASM build; browser integration
 
