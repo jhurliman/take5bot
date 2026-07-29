@@ -27,11 +27,8 @@ jobs:
           cache: 'npm'
           cache-dependency-path: 'web/package-lock.json'
 
-      - name: Install dependencies
-        run: npm ci || npm install
-
-      - name: Run ESLint
-        run: npm run lint
+      - name: CI script (install, lint, build)
+        run: npm run ci
 
   python-smoke:
     name: Python Smoke Test
@@ -58,7 +55,7 @@ jobs:
           pyspiel.register_game(mod.GAME_TYPE, mod.TakeFiveGame)
           g = pyspiel.load_game('take5')
           s = g.new_initial_state()
-          print('Loaded take5. Initial state rows:', s._rows if hasattr(s, '_rows') else 'n/a')
+          print('Loaded take5. Initial state:', str(s))
           PY
 
       - name: Style (ruff) check (non-blocking)
