@@ -225,3 +225,7 @@ data_unizero/
 
 # Don't commit vendored code (for now at least)
 open_spiel-1.6/
+
+# Rust engine
+engine/target/
+py/take5_engine.so

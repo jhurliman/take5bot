@@ -1,0 +1,8 @@
+[package]
+name = "take5-core"
+version = "0.1.0"
+edition = "2021"
+description = "Take 5 (6 nimmt!) rules engine, observation encoding, baseline bots, and arena. Dependency-free so it builds for native, Python (PyO3), and WASM targets."
+license = "MIT"
+
+[dependencies]

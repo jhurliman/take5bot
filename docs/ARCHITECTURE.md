@@ -1,0 +1,69 @@
+# take5bot v2 architecture
+
+Goal: a genuinely strong Take 5 (6 nimmt!) bot, playable in the browser.
+
+## Why not MuZero (the v1 approach)
+
+Take 5 is an imperfect-information, simultaneous-move game. MuZero assumes
+perfect information and sequential moves; making it fit required wrapping the
+4-player game as a single-agent env stepped round-robin, which broke reward
+credit assignment (penalties resolved in a joint step were attributed to
+whichever seat happened to be "current"). The v1 stack lives on in `take5bot/`
+and its checkpoints remain arena baselines.
+
+## The v2 recipe
+
+1. **One rules engine, three targets.** `engine/take5-core` (Rust, zero
+   dependencies) is the single source of truth for rules and observation
+   encoding. It builds natively for training and the arena (via
+   `engine/take5-py`, PyO3) and will build to WASM for the browser. The
+   legacy OpenSpiel implementation is the reference: `tests/parity_check.py`
+   drives both engines through identical games and asserts identical state
+   after every action.
+2. **Model-free self-play (PPO) for training.** Each seat sees only its own
+   `View`, so hidden information is handled correctly by construction and
+   simultaneous moves need no serialization hack. League play (checkpoint
+   pool + heuristic exploiters) guards against self-play overfitting.
+3. **Search only at inference.** Determinized rollouts/IS-MCTS on top of the
+   trained net, with opponent hands sampled from a learned belief head.
+   Strength scales with think time; runs in the browser via WASM.
+4. **The arena is the referee.** Fixed baselines (random, lowest, greedy,
+   `mc:<worlds>` determinized rollout search, legacy MuZero checkpoint);
+   seats rotate; every game reproducible from `(seed, index)`. A candidate is
+   only "better" when it beats the incumbent with statistical significance.
+
+## Observation encoding (v2, 264 dims)
+
+Defined once in `take5-core/src/obs.rs` (see the layout table there). Key
+additions over v1: the played-cards mask (card counting), all players'
+penalty totals seat-relative, turn/hand counters, and forced-row-choice
+context. Bullhead values are not encoded — they are a deterministic function
+of card id. The schema supports 2-10 players from day one.
+
+## Components
+
+| Path | What |
+| --- | --- |
+| `engine/take5-core` | Rules, `View` (per-seat info barrier), obs encoding, SplitMix64 RNG, baseline bots, match runner |
+| `engine/take5-py` | `take5_engine` Python module: `Game`, `run_arena` (multithreaded, GIL-released) |
+| `scripts/build_engine.sh` | Builds `py/take5_engine.so` (abi3, py>=3.10) |
+| `arena/run_arena.py` | CLI: mean penalty ± 95% CI and win rates per bot |
+| `tests/parity_check.py` | Move-for-move parity vs the legacy OpenSpiel implementation |
+
+## Baseline results (20k games for heuristics, 4k for mc:64, seed 0)
+
+| matchup | mean penalty | win rate |
+| --- | --- | --- |
+| greedy vs lowest + 2x random | 8.3 vs 13.0 / 15.9 / 16.1 | 47% |
+| mc:64 vs 3x greedy | 7.6 vs ~14.7 | 45% (25% = parity) |
+
+Heuristic-only games run at ~1.1M games/s on a desktop CPU; `mc:64` plays
+~700 full games/s including its internal search.
+
+## Milestones
+
+- [x] M1: Rust engine, parity with legacy implementation, Python bindings
+- [x] M2: Arena + baselines including determinized MC rollout search
+- [ ] M3: PPO self-play training; beat `mc:64` and the legacy checkpoint
+- [ ] M4: League training + belief head (opponent hand prediction)
+- [ ] M5: Belief-guided search; WASM build; browser integration
