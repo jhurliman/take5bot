@@ -101,11 +101,20 @@ impl Game {
         if !(2..=MAX_PLAYERS).contains(&num_players)
             || row_starters.len() != ROWS
             || penalties.len() != num_players
+            || hands.iter().any(|h| h & !FULL_DECK != 0)
         {
             return Err(GameError::InvalidArgument);
         }
         let mut played: CardSet = 0;
         for &c in &row_starters {
+            // Reject out-of-range ids, duplicate starters, and starters that
+            // are simultaneously claimed as hand cards.
+            if !(1..=NUM_CARDS as Card).contains(&c)
+                || set_contains(played, c)
+                || hands.iter().any(|h| set_contains(*h, c))
+            {
+                return Err(GameError::InvalidArgument);
+            }
             set_insert(&mut played, c);
         }
         let rows = [
@@ -136,10 +145,17 @@ impl Game {
         turn: u8,
     ) -> Result<Game, GameError> {
         let num_players = hands.len();
-        if !(2..=MAX_PLAYERS).contains(&num_players) || penalties.len() != num_players {
+        if !(2..=MAX_PLAYERS).contains(&num_players)
+            || penalties.len() != num_players
+            || hands.iter().any(|h| h & !FULL_DECK != 0)
+        {
             return Err(GameError::InvalidArgument);
         }
-        if rows.iter().any(|r| r.is_empty() || r.len() > MAX_ROW_LEN) {
+        if rows.iter().any(|r| {
+            r.is_empty()
+                || r.len() > MAX_ROW_LEN
+                || r.iter().any(|&c| !(1..=NUM_CARDS as Card).contains(&c))
+        }) {
             return Err(GameError::InvalidArgument);
         }
         Ok(Game {
@@ -396,6 +412,42 @@ mod tests {
         assert_eq!(Game::target_row(&rows, 71), Some(3));
         assert_eq!(Game::target_row(&rows, 11), Some(0));
         assert_eq!(Game::target_row(&rows, 9), None);
+    }
+
+    #[test]
+    fn from_state_rejects_malformed_input() {
+        let hands = || vec![hand_of(&[11]), hand_of(&[16])];
+        let ok = |starters: Vec<Card>| Game::from_state(hands(), starters, vec![0, 0], 0);
+        // Out-of-range starters (0 would wrap to bit 127; 105 is off-deck).
+        assert_eq!(
+            ok(vec![0, 20, 30, 40]).err(),
+            Some(GameError::InvalidArgument)
+        );
+        assert_eq!(
+            ok(vec![105, 20, 30, 40]).err(),
+            Some(GameError::InvalidArgument)
+        );
+        // Duplicate starters and starters already claimed as hand cards.
+        assert_eq!(
+            ok(vec![20, 20, 30, 40]).err(),
+            Some(GameError::InvalidArgument)
+        );
+        assert_eq!(
+            ok(vec![11, 20, 30, 40]).err(),
+            Some(GameError::InvalidArgument)
+        );
+        // Hand masks with bits beyond card 104.
+        assert_eq!(
+            Game::from_state(
+                vec![1u128 << 120, hand_of(&[16])],
+                vec![10, 20, 30, 40],
+                vec![0, 0],
+                0
+            )
+            .err(),
+            Some(GameError::InvalidArgument)
+        );
+        assert!(ok(vec![10, 20, 30, 40]).is_ok());
     }
 
     #[test]

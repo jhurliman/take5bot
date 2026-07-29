@@ -42,6 +42,8 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--threads", type=int, default=0, help="0 = all cores")
     args = parser.parse_args()
+    if args.games < 1:
+        parser.error("--games must be >= 1")
 
     specs = args.bots.split(",")
     start = time.time()
