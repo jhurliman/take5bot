@@ -4,26 +4,27 @@ Interactive Take 5 gameplay script.
 Human player inputs game state and receives AI recommendations.
 """
 
-import sys
-import os
 import argparse
+import glob
+import os
+import sys
+
 import numpy as np
 import torch
-from typing import List, Dict, Tuple, Optional
-import glob
 
 # Add the project root to the Python path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import take5bot.take5_env as take5_env  # noqa: E402
-from lzero.policy.muzero import MuZeroPolicy  # type: ignore  # noqa: E402
-from easydict import EasyDict  # type: ignore  # noqa: E402
+from easydict import EasyDict  # type: ignore
+from lzero.policy.muzero import MuZeroPolicy  # type: ignore
+
+from take5bot import take5_env
 
 
 class Take5AIPlayer:
     """AI player for Take 5 using trained MuZero model."""
 
-    def __init__(self, model_path: str, config: Dict | None = None):
+    def __init__(self, model_path: str, config: dict | None = None):
         """Initialize the AI player with a trained model."""
         self.model_path = model_path
         self.config = config or self._default_config()
@@ -31,7 +32,7 @@ class Take5AIPlayer:
         self.env = None
         self._load_model()
 
-    def _default_config(self) -> Dict:
+    def _default_config(self) -> dict:
         """Default configuration for the AI player."""
         # Get base config and update with minimal required settings
         config = MuZeroPolicy.default_config()
@@ -128,7 +129,7 @@ class Take5AIPlayer:
         self.env = take5_env.Take5LightZeroEnv()
 
     def encode_game_state(
-        self, hand: List[int], rows: List[List[int]], current_penalty: int = 0
+        self, hand: list[int], rows: list[list[int]], current_penalty: int = 0
     ) -> np.ndarray:
         """Encode the game state into the format expected by the model (253 elements).
         This MUST match exactly the observation_tensor format from openspiel_take5.py
@@ -195,8 +196,8 @@ class Take5AIPlayer:
         return np.concatenate([hand_info, row_info, penalty_info])
 
     def get_action_recommendation(
-        self, hand: List[int], rows: List[List[int]], current_penalty: int = 0
-    ) -> Tuple[int, float]:
+        self, hand: list[int], rows: list[list[int]], current_penalty: int = 0
+    ) -> tuple[int, float]:
         """Get AI recommendation for the next action."""
         # Encode game state
         obs = self.encode_game_state(hand, rows, current_penalty)
@@ -309,8 +310,8 @@ class Take5AIPlayer:
         self,
         recommended_card: int,
         confidence: float,
-        hand: List[int],
-        rows: List[List[int]],
+        hand: list[int],
+        rows: list[list[int]],
     ) -> str:
         """Provide explanation for the AI's recommendation."""
         explanations = []
@@ -348,7 +349,7 @@ class Take5AIPlayer:
         return "\n".join(explanations)
 
 
-def parse_input(prompt: str) -> List[int]:
+def parse_input(prompt: str) -> list[int]:
     """Parse space-separated integers from user input."""
     try:
         return [int(x) for x in input(prompt).strip().split()]
@@ -357,7 +358,7 @@ def parse_input(prompt: str) -> List[int]:
         return []
 
 
-def display_game_state(hand: List[int], rows: List[List[int]]):
+def display_game_state(hand: list[int], rows: list[list[int]]):
     """Display the current game state in a readable format."""
     print("\n" + "=" * 60)
     print("CURRENT GAME STATE")
@@ -374,7 +375,7 @@ def display_game_state(hand: List[int], rows: List[List[int]]):
     print("=" * 60)
 
 
-def find_best_model(base_dir: str = "data_muzero") -> Optional[str]:
+def find_best_model(base_dir: str = "data_muzero") -> str | None:
     """Find the best checkpoint from the most recent training run."""
     if not os.path.exists(base_dir):
         return None
@@ -387,10 +388,7 @@ def find_best_model(base_dir: str = "data_muzero") -> Optional[str]:
         return None
 
     # First, try to find ckpt_best.pth.tar files (best performing models)
-    best_checkpoints = [
-        ckpt for ckpt in checkpoints
-        if "ckpt_best.pth.tar" in ckpt
-    ]
+    best_checkpoints = [ckpt for ckpt in checkpoints if "ckpt_best.pth.tar" in ckpt]
 
     if best_checkpoints:
         # Return the most recent best checkpoint (by modification time)
@@ -400,7 +398,7 @@ def find_best_model(base_dir: str = "data_muzero") -> Optional[str]:
     return find_latest_model(base_dir)
 
 
-def find_latest_model(base_dir: str = "data_muzero") -> Optional[str]:
+def find_latest_model(base_dir: str = "data_muzero") -> str | None:
     """Find the latest trained model."""
     if not os.path.exists(base_dir):
         return None

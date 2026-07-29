@@ -1,23 +1,26 @@
 # take5_env.py
 
-from typing import Any, Dict, List
-import numpy as np
-import pyspiel
-import gym
 import os
 import sys
-from gym import spaces
-from lzero.envs.wrappers.lightzero_env_wrapper import LightZeroEnvWrapper  # type: ignore
+from typing import Any
+
+import gym
+import numpy as np
+import pyspiel
 from ding.envs import BaseEnvTimestep  # type: ignore
-from easydict import EasyDict  # type: ignore
 from ding.utils import ENV_REGISTRY  # type: ignore
+from easydict import EasyDict  # type: ignore
+from gym import spaces
+from lzero.envs.wrappers.lightzero_env_wrapper import (
+    LightZeroEnvWrapper,  # type: ignore
+)
 
 # Add the project root to the Python path
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(current_dir)
-sys.path.append(os.path.join(current_dir, 'take5bot'))
+sys.path.append(os.path.join(current_dir, "take5bot"))
 
-import openspiel_take5  # type: ignore  # noqa: E402
+import openspiel_take5  # type: ignore
 
 GAME_NAME = "take5"
 
@@ -30,7 +33,7 @@ class Take5OpenSpielEnv(gym.Env):
     This adapts the OpenSpiel interface to work with Gym/LightZero.
     """
 
-    def __init__(self, cfg: Dict[str, Any] | None = None):
+    def __init__(self, cfg: dict[str, Any] | None = None):
         super().__init__()
         self.cfg = cfg or {}
         self.game = pyspiel.load_game(GAME_NAME)
@@ -249,7 +252,6 @@ class Take5OpenSpielEnv(gym.Env):
 
     def close(self):
         """Close the environment."""
-        pass
 
     def seed(self, seed=None, dynamic_seed=None):
         """Set the random seed."""
@@ -286,7 +288,7 @@ class Take5OpenSpielEnv(gym.Env):
 class Take5LightZeroEnv(LightZeroEnvWrapper):
     """LightZero-compatible wrapper around the OpenSpiel Take 5 game."""
 
-    def __init__(self, cfg: EasyDict | Dict[str, Any] | None = None):
+    def __init__(self, cfg: EasyDict | dict[str, Any] | None = None):
         # Create the base OpenSpiel environment
         base_env = Take5OpenSpielEnv(cfg)
 
@@ -388,7 +390,7 @@ class Take5LightZeroEnv(LightZeroEnvWrapper):
         return self.env.seed(seed, dynamic_seed)
 
     @staticmethod
-    def create_collector_env_cfg(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def create_collector_env_cfg(cfg: dict[str, Any]) -> list[dict[str, Any]]:
         """Create collector environment configurations for parallel data collection."""
         import copy
 
@@ -397,7 +399,7 @@ class Take5LightZeroEnv(LightZeroEnvWrapper):
         return [cfg_copy for _ in range(collector_env_num)]
 
     @staticmethod
-    def create_evaluator_env_cfg(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def create_evaluator_env_cfg(cfg: dict[str, Any]) -> list[dict[str, Any]]:
         """Create evaluator environment configurations for parallel evaluation."""
         import copy
 

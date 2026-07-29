@@ -3,10 +3,10 @@
 Lightweight training script for Take 5 using MuZero.
 """
 
-import sys
-import os
-import time
 import logging
+import os
+import sys
+import time
 from datetime import datetime
 
 # Add the project root to the Python path
@@ -59,7 +59,11 @@ def run_monitored_training():
         # Import and load config
         monitor.log("Loading configuration")
         try:
-            from take5_muzero_config import main_config, create_config, max_env_step  # type: ignore
+            from take5_muzero_config import (  # type: ignore
+                create_config,
+                main_config,
+                max_env_step,
+            )
 
             monitor.log(f"Config loaded - Max steps: {max_env_step}")
             monitor.log(f"CUDA: {main_config.policy.cuda}")
