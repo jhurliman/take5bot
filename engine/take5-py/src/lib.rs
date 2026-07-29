@@ -1,8 +1,11 @@
 //! Python bindings: thin wrappers over take5-core plus a multithreaded arena
 //! entry point. Build with `scripts/build_engine.sh`; import as `take5_engine`.
 
+mod vec_games;
+
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use vec_games::VecGames;
 use take5_core::bots::BotSpec;
 use take5_core::cards::{set_contains, set_insert, CardSet, NUM_CARDS};
 use take5_core::{arena, encode_observation, Phase, OBS_LEN};
@@ -217,6 +220,7 @@ fn run_arena(
 #[pymodule]
 fn take5_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Game>()?;
+    m.add_class::<VecGames>()?;
     m.add_function(wrap_pyfunction!(obs_len, m)?)?;
     m.add_function(wrap_pyfunction!(bullheads, m)?)?;
     m.add_function(wrap_pyfunction!(run_arena, m)?)?;

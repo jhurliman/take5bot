@@ -229,3 +229,4 @@ open_spiel-1.6/
 # Rust engine
 engine/target/
 py/take5_engine.so
+training/runs/

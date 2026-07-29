@@ -33,7 +33,7 @@ impl BotSpec {
         }
     }
 
-    pub fn build(&self) -> Box<dyn Bot> {
+    pub fn build(&self) -> Box<dyn Bot + Send + Sync> {
         match *self {
             BotSpec::Random => Box::new(RandomBot),
             BotSpec::Lowest => Box::new(LowestBot),

@@ -64,6 +64,19 @@ Heuristic-only games run at ~1.1M games/s on a desktop CPU; `mc:64` plays
 
 - [x] M1: Rust engine, parity with legacy implementation, Python bindings
 - [x] M2: Arena + baselines including determinized MC rollout search
-- [ ] M3: PPO self-play training; beat `mc:64` and the legacy checkpoint
+- [x] M3: PPO self-play training (`training/train_ppo.py` on a vectorized
+      `VecGames` env with mixed self-play/bot opponent pools;
+      `training/eval_arena.py` evaluates checkpoints)
 - [ ] M4: League training + belief head (opponent hand prediction)
 - [ ] M5: Belief-guided search; WASM build; browser integration
+
+### Training notes (M3)
+
+`VecGames` (in `take5-py`) steps N deals in lockstep; every deal is exactly
+10 simultaneous turns, so rollouts are rectangular. Per-seat rewards are
+relative bull deltas (mean of others minus own) attributed at resolution
+time — they sum to the final relative score and are zero-sum across seats.
+Policy-seat forced row choices use the cheapest-row heuristic in v1 (a
+row-choice head is M4 work). Pure mirror self-play plateaued without
+transferring to other styles, so training mixes pools: half pure self-play,
+half with greedy/random/mc:8 bot seats.
