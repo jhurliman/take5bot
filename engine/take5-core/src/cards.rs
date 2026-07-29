@@ -8,11 +8,11 @@ pub fn bullheads(card: Card) -> u8 {
     debug_assert!((1..=NUM_CARDS as u8).contains(&card));
     if card == 55 {
         7
-    } else if card % 11 == 0 {
+    } else if card.is_multiple_of(11) {
         5
-    } else if card % 10 == 0 {
+    } else if card.is_multiple_of(10) {
         3
-    } else if card % 5 == 0 {
+    } else if card.is_multiple_of(5) {
         2
     } else {
         1
