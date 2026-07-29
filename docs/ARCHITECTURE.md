@@ -69,7 +69,10 @@ Heuristic-only games run at ~1.1M games/s on a desktop CPU; `mc:64` plays
       `training/eval_arena.py` evaluates checkpoints). The raw policy beats
       greedy (11.6 vs 13.2 mean penalty over 5k games) and matches mc:16;
       mc:64 still wins — that gap is M4/M5's job (league + search).
-- [ ] M4: League training + belief head (opponent hand prediction)
+- [x] M4: League training (frozen past-self snapshots in the rollout pool)
+      + belief head: auxiliary cross-entropy predicting, per unseen card,
+      which opponent holds it or whether it is in the stock. Targets come
+      from `VecGames.belief_targets()` (training-only hidden-state read).
 - [ ] M5: Belief-guided search; WASM build; browser integration
 
 ### Training notes (M3)

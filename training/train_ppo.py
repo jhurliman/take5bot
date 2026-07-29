@@ -1,25 +1,34 @@
 #!/usr/bin/env python3
-"""PPO self-play trainer for Take 5 (M3 of docs/ARCHITECTURE.md).
+"""PPO league self-play trainer for Take 5 (M3+M4 of docs/ARCHITECTURE.md).
 
-All four seats share one policy network and learn from per-seat relative
-rewards (mean of others' bull deltas minus own), which sum to the seat's
-final relative score over a deal. Deals are exactly 10 simultaneous turns,
-so rollouts are rectangular: (turns, games * seats).
+Seats share one learner network. Rollouts come from a mixed pool:
+pure self-play, games against engine bots (greedy/random/mc), and league
+games against frozen snapshots of the learner's past selves. Per-seat
+rewards are relative bull deltas (mean of others' minus own), which sum to
+the seat's final relative score over a deal.
+
+The network also carries a belief head trained (auxiliary cross-entropy)
+to predict, for every card the seat cannot see, whether each opponent
+holds it or it sits in the undealt stock. Targets come from
+`VecGames.belief_targets()` — training-only supervision that never feeds
+the observation path. The belief head powers M5's determinized search.
 
 Examples:
-  .venv/bin/python training/train_ppo.py --iters 500 --out training/runs/v1
-  .venv/bin/python training/train_ppo.py --iters 2000 --games 2048 --wandb
+  .venv/bin/python training/train_ppo.py --iters 1500 --out training/runs/m4
+  .venv/bin/python training/train_ppo.py --init-from training/runs/m3/best.pt
 
 Evaluate a checkpoint: training/eval_arena.py.
 """
 
 import argparse
 import os
+import random
 import sys
 import time
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch import nn
 
 sys.path.insert(
@@ -30,6 +39,8 @@ import take5_engine
 
 NUM_CARDS = 104
 TURNS = 10
+SEATS = 4
+BELIEF_CLASSES = SEATS  # 3 opponents (relative seat order) + undealt stock
 OBS_LEN = take5_engine.obs_len()
 
 
@@ -46,7 +57,7 @@ class Residual(nn.Module):
 
 
 class PolicyNet(nn.Module):
-    """Shared trunk with a masked 104-way card policy head and a value head."""
+    """Trunk with masked card policy, value, and opponent-belief heads."""
 
     def __init__(self, width: int = 512, blocks: int = 2):
         super().__init__()
@@ -57,10 +68,14 @@ class PolicyNet(nn.Module):
         self.trunk = nn.Sequential(*layers)
         self.policy = nn.Linear(width, NUM_CARDS)
         self.value = nn.Linear(width, 1)
+        self.belief = nn.Linear(width, NUM_CARDS * BELIEF_CLASSES)
 
-    def forward(self, obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(
+        self, obs: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         h = self.trunk(obs)
-        return self.policy(h), self.value(h).squeeze(-1)
+        belief = self.belief(h).view(-1, NUM_CARDS, BELIEF_CLASSES)
+        return self.policy(h), self.value(h).squeeze(-1), belief
 
 
 def masked_categorical(
@@ -90,7 +105,7 @@ def eval_vs(
         obs, mask = env.observe()
         obs_t = torch.as_tensor(obs, device=device).view(-1, OBS_LEN)
         mask_t = torch.as_tensor(mask, device=device).view(-1, NUM_CARDS)
-        logits, _ = net(obs_t)
+        logits, _, _ = net(obs_t)
         acts = (
             logits.masked_fill(mask_t < 0.5, float("-inf")).argmax(dim=-1).cpu().numpy()
         )
@@ -108,47 +123,88 @@ def eval_vs(
     }
 
 
-def collect_rollout(
-    net: PolicyNet,
-    env,
-    num_games: int,
-    seats: int,
-    device: torch.device,
+class EnvSlot:
+    """One rollout env plus who drives each policy seat.
+
+    `driver_slots[j]` indexes into the nets list passed to `collect`:
+    slot 0 is the learner (trainable); higher slots are frozen league nets.
+    """
+
+    def __init__(
+        self,
+        num_games: int,
+        specs: list[str | None],
+        driver_slots: list[int],
+        seed: int,
+        device: torch.device,
+    ):
+        self.env = take5_engine.VecGames(num_games, specs, seed)
+        self.num_games = num_games
+        self.driver_slots = driver_slots
+        k = len(driver_slots)
+        assert k == len(self.env.policy_seats())
+        self.rows = num_games * k
+        # Constant flat row indices (game-major) per driver slot.
+        self.driver_rows = {
+            slot: torch.tensor(
+                [
+                    g * k + j
+                    for g in range(num_games)
+                    for j, s in enumerate(driver_slots)
+                    if s == slot
+                ],
+                dtype=torch.long,
+                device=device,
+            )
+            for slot in sorted(set(driver_slots))
+        }
+        self.train_rows = self.driver_rows[0]
+
+
+@torch.no_grad()
+def collect(
+    slot: EnvSlot, nets: list[PolicyNet], device: torch.device
 ) -> dict[str, torch.Tensor]:
-    rows = num_games * seats
-    obs_buf = torch.empty(TURNS, rows, OBS_LEN, device=device)
-    mask_buf = torch.empty(TURNS, rows, NUM_CARDS, device=device)
-    act_buf = torch.empty(TURNS, rows, dtype=torch.long, device=device)
-    logp_buf = torch.empty(TURNS, rows, device=device)
-    val_buf = torch.empty(TURNS, rows, device=device)
-    rew_buf = torch.empty(TURNS, rows, device=device)
-
-    with torch.no_grad():
-        for t in range(TURNS):
-            obs, mask = env.observe()
-            obs_t = torch.as_tensor(obs, device=device).view(rows, OBS_LEN)
-            mask_t = torch.as_tensor(mask, device=device).view(rows, NUM_CARDS)
-            logits, value = net(obs_t)
-            dist = masked_categorical(logits, mask_t)
-            action = dist.sample()
-            rewards, dones, _ = env.step((action.cpu().numpy() + 1).astype(np.int64))
-
-            obs_buf[t] = obs_t
-            mask_buf[t] = mask_t
-            act_buf[t] = action
-            logp_buf[t] = dist.log_prob(action)
-            val_buf[t] = value
-            rew_buf[t] = torch.as_tensor(rewards, device=device)
-        assert dones.all(), "deals must finish in exactly TURNS steps"
-
-    return {
-        "obs": obs_buf,
-        "mask": mask_buf,
-        "act": act_buf,
-        "logp": logp_buf,
-        "val": val_buf,
-        "rew": rew_buf,
+    """Roll one full deal through `slot`; returns trainable-row buffers."""
+    rows = slot.rows
+    t_rows = len(slot.train_rows)
+    buf = {
+        "obs": torch.empty(TURNS, t_rows, OBS_LEN, device=device),
+        "mask": torch.empty(TURNS, t_rows, NUM_CARDS, device=device),
+        "act": torch.empty(TURNS, t_rows, dtype=torch.long, device=device),
+        "logp": torch.empty(TURNS, t_rows, device=device),
+        "val": torch.empty(TURNS, t_rows, device=device),
+        "rew": torch.empty(TURNS, t_rows, device=device),
+        "belief": torch.empty(
+            TURNS, t_rows, NUM_CARDS, dtype=torch.long, device=device
+        ),
     }
+    for t in range(TURNS):
+        obs, mask = slot.env.observe()
+        obs_t = torch.as_tensor(obs, device=device).view(rows, OBS_LEN)
+        mask_t = torch.as_tensor(mask, device=device).view(rows, NUM_CARDS)
+        belief_t = torch.as_tensor(slot.env.belief_targets(), device=device).view(
+            rows, NUM_CARDS
+        )
+
+        actions = torch.empty(rows, dtype=torch.long, device=device)
+        for s, rid in slot.driver_rows.items():
+            logits, value, _ = nets[s](obs_t[rid])
+            dist = masked_categorical(logits, mask_t[rid])
+            act = dist.sample()
+            actions[rid] = act
+            if s == 0:
+                buf["obs"][t] = obs_t[rid]
+                buf["mask"][t] = mask_t[rid]
+                buf["act"][t] = act
+                buf["logp"][t] = dist.log_prob(act)
+                buf["val"][t] = value
+                buf["belief"][t] = belief_t[rid]
+
+        rewards, dones, _ = slot.env.step((actions.cpu().numpy() + 1).astype(np.int64))
+        buf["rew"][t] = torch.as_tensor(rewards, device=device)[slot.train_rows]
+    assert dones.all(), "deals must finish in exactly TURNS steps"
+    return buf
 
 
 def gae(
@@ -168,22 +224,28 @@ def gae(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--games", type=int, default=1024, help="parallel deals")
-    parser.add_argument("--iters", type=int, default=500)
+    parser.add_argument("--games", type=int, default=1536, help="deals across the pool")
+    parser.add_argument("--iters", type=int, default=1500)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--clip", type=float, default=0.2)
     parser.add_argument("--entropy", type=float, default=0.015)
     parser.add_argument("--value-coef", type=float, default=0.5)
+    parser.add_argument("--belief-coef", type=float, default=0.5)
     parser.add_argument("--gae-lambda", type=float, default=0.95)
     parser.add_argument("--ppo-epochs", type=int, default=3)
     parser.add_argument("--minibatch", type=int, default=8192)
     parser.add_argument("--width", type=int, default=512)
     parser.add_argument("--blocks", type=int, default=2)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--league-size", type=int, default=8)
+    parser.add_argument("--snapshot-every", type=int, default=100)
     parser.add_argument("--eval-every", type=int, default=25)
     parser.add_argument("--eval-games", type=int, default=1000)
     parser.add_argument("--out", default="training/runs/latest")
     parser.add_argument("--resume", default=None, help="checkpoint to resume from")
+    parser.add_argument(
+        "--init-from", default=None, help="warm-start weights (non-strict load)"
+    )
     parser.add_argument(
         "--device", default="cuda" if torch.cuda.is_available() else "cpu"
     )
@@ -192,33 +254,40 @@ def main() -> int:
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
+    random.seed(args.seed)
     device = torch.device(args.device)
     os.makedirs(args.out, exist_ok=True)
 
-    # Opponent mixture: pure mirror self-play converges to an equilibrium
-    # that transfers poorly to other styles, so half the pool trains against
-    # engine bots (the poor-man's league; full league lands in M4).
-    pool_specs: list[list[str | None]] = [
-        [None, None, None, None],
-        [None, None, None, None],
-        [None, "greedy", "greedy", "greedy"],
-        [None, None, "greedy", "greedy"],
-        [None, "greedy", "random", "mc:8"],
+    # Rollout pool: self-play, bot anchors (style transfer), and league games
+    # against frozen snapshots (driver slots 1 and 2).
+    n = max(args.games // 6, 1)
+    pool = [
+        EnvSlot(n, [None] * 4, [0, 0, 0, 0], args.seed + 1, device),
+        EnvSlot(n, [None] * 4, [0, 0, 0, 0], args.seed + 2, device),
+        EnvSlot(n, [None, "greedy", "greedy", "greedy"], [0], args.seed + 3, device),
+        EnvSlot(n, [None, "greedy", "random", "mc:8"], [0], args.seed + 4, device),
+        EnvSlot(n, [None] * 4, [0, 0, 1, 1], args.seed + 5, device),
+        EnvSlot(n, [None] * 4, [0, 2, 2, 2], args.seed + 6, device),
     ]
-    envs = []
-    for i, spec in enumerate(pool_specs):
-        n = max(args.games // len(pool_specs), 1)
-        k = sum(1 for s in spec if s is None)
-        envs.append((take5_engine.VecGames(n, spec, args.seed + i), n, k))
 
-    net = PolicyNet(args.width, args.blocks).to(device)
-    opt = torch.optim.Adam(net.parameters(), lr=args.lr)
+    learner = PolicyNet(args.width, args.blocks).to(device)
+    frozen = [
+        PolicyNet(args.width, args.blocks).to(device).requires_grad_(False)
+        for _ in range(2)
+    ]
+    nets = [learner, *frozen]
+    opt = torch.optim.Adam(learner.parameters(), lr=args.lr)
+    league: list[dict] = []
     start_iter = 0
     best_pen = float("inf")
 
+    if args.init_from:
+        ckpt = torch.load(args.init_from, map_location=device, weights_only=True)
+        missing, _unexpected = learner.load_state_dict(ckpt["model"], strict=False)
+        print(f"warm start from {args.init_from} (missing={missing})")
     if args.resume:
         ckpt = torch.load(args.resume, map_location=device, weights_only=True)
-        net.load_state_dict(ckpt["model"])
+        learner.load_state_dict(ckpt["model"])
         opt.load_state_dict(ckpt["opt"])
         start_iter = ckpt.get("iter", 0)
         best_pen = ckpt.get("best_pen", float("inf"))
@@ -233,40 +302,62 @@ def main() -> int:
     def save(path: str, iteration: int) -> None:
         torch.save(
             {
-                "model": net.state_dict(),
+                "model": learner.state_dict(),
                 "opt": opt.state_dict(),
                 "iter": iteration,
                 "best_pen": best_pen,
-                "config": {"width": args.width, "blocks": args.blocks},
+                "config": {
+                    "width": args.width,
+                    "blocks": args.blocks,
+                    "belief_classes": BELIEF_CLASSES,
+                },
             },
             path,
         )
 
-    rows = sum(n * k for _, n, k in envs)
+    def snapshot() -> dict:
+        return {k: v.detach().cpu().clone() for k, v in learner.state_dict().items()}
+
     for it in range(start_iter, args.iters):
         t0 = time.time()
+
+        # Refresh league opponents. Before the first snapshot exists the
+        # frozen nets mirror the learner, i.e. plain self-play.
+        for f in frozen:
+            f.load_state_dict(random.choice(league) if league else learner.state_dict())
+
         flats: dict[str, list[torch.Tensor]] = {}
         advs: list[torch.Tensor] = []
         rets: list[torch.Tensor] = []
-        for env, n, k in envs:
-            roll = collect_rollout(net, env, n, k, device)
+        for slot in pool:
+            roll = collect(slot, nets, device)
             adv, ret = gae(roll["rew"], roll["val"], args.gae_lambda)
+            t_rows = roll["rew"].shape[1]
             for key, v in roll.items():
-                flats.setdefault(key, []).append(v.reshape(TURNS * n * k, *v.shape[2:]))
+                flats.setdefault(key, []).append(
+                    v.reshape(TURNS * t_rows, *v.shape[2:])
+                )
             advs.append(adv.reshape(-1))
             rets.append(ret.reshape(-1))
         flat = {key: torch.cat(v) for key, v in flats.items()}
         adv_f = torch.cat(advs)
         ret_f = torch.cat(rets)
         adv_f = (adv_f - adv_f.mean()) / (adv_f.std() + 1e-8)
+        total_rows = adv_f.shape[0]
 
-        stats = {"policy_loss": 0.0, "value_loss": 0.0, "entropy": 0.0, "kl": 0.0}
+        stats = {
+            "policy_loss": 0.0,
+            "value_loss": 0.0,
+            "belief_loss": 0.0,
+            "entropy": 0.0,
+            "kl": 0.0,
+        }
         batches = 0
         for _ in range(args.ppo_epochs):
-            perm = torch.randperm(TURNS * rows, device=device)
-            for i in range(0, len(perm), args.minibatch):
+            perm = torch.randperm(total_rows, device=device)
+            for i in range(0, total_rows, args.minibatch):
                 idx = perm[i : i + args.minibatch]
-                logits, value = net(flat["obs"][idx])
+                logits, value, belief = learner(flat["obs"][idx])
                 dist = masked_categorical(logits, flat["mask"][idx])
                 logp = dist.log_prob(flat["act"][idx])
                 ratio = (logp - flat["logp"][idx]).exp()
@@ -275,35 +366,56 @@ def main() -> int:
                     ratio * adv_f[idx], clipped * adv_f[idx]
                 ).mean()
                 value_loss = (value - ret_f[idx]).pow(2).mean()
+                belief_loss = F.cross_entropy(
+                    belief.reshape(-1, BELIEF_CLASSES),
+                    flat["belief"][idx].reshape(-1),
+                    ignore_index=-100,
+                )
                 entropy = dist.entropy().mean()
                 loss = (
-                    policy_loss + args.value_coef * value_loss - args.entropy * entropy
+                    policy_loss
+                    + args.value_coef * value_loss
+                    + args.belief_coef * belief_loss
+                    - args.entropy * entropy
                 )
                 opt.zero_grad()
                 loss.backward()
-                nn.utils.clip_grad_norm_(net.parameters(), 0.5)
+                nn.utils.clip_grad_norm_(learner.parameters(), 0.5)
                 opt.step()
 
-                with torch.no_grad():
-                    stats["policy_loss"] += float(policy_loss)
-                    stats["value_loss"] += float(value_loss)
-                    stats["entropy"] += float(entropy)
-                    stats["kl"] += float((flat["logp"][idx] - logp).mean())
+                stats["policy_loss"] += float(policy_loss)
+                stats["value_loss"] += float(value_loss)
+                stats["belief_loss"] += float(belief_loss)
+                stats["entropy"] += float(entropy)
+                stats["kl"] += float((flat["logp"][idx] - logp).mean())
                 batches += 1
         for k in stats:
             stats[k] /= batches
 
+        if (it + 1) % args.snapshot_every == 0:
+            if len(league) >= args.league_size:
+                league[random.randrange(len(league))] = snapshot()
+            else:
+                league.append(snapshot())
+
         dt = time.time() - t0
         line = (
             f"iter {it:4d}  pi {stats['policy_loss']:+.4f}  "
-            f"v {stats['value_loss']:7.2f}  ent {stats['entropy']:.3f}  "
-            f"kl {stats['kl']:+.4f}  {rows * TURNS / dt:,.0f} samp/s"
+            f"v {stats['value_loss']:6.2f}  bel {stats['belief_loss']:.4f}  "
+            f"ent {stats['entropy']:.3f}  kl {stats['kl']:+.4f}  "
+            f"league {len(league)}  {total_rows / dt:,.0f} samp/s"
         )
 
         if (it + 1) % args.eval_every == 0 or it == args.iters - 1:
-            greedy = eval_vs(net, ["greedy"] * 3, args.eval_games, 10_000 + it, device)
+            greedy = eval_vs(
+                learner, ["greedy"] * 3, args.eval_games, 10_000 + it, device
+            )
             mc = eval_vs(
-                net, ["mc:16"] * 3, max(args.eval_games // 5, 100), 20_000 + it, device
+                learner,
+                ["mc:16"] * 3,
+                max(args.eval_games // 5, 100),
+                20_000 + it,
+                device,
             )
             line += (
                 f"  | vs greedy {greedy['policy_pen']:.2f}/{greedy['opp_pen']:.2f} "

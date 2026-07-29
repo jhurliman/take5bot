@@ -141,6 +141,42 @@ impl VecGames {
         (obs.into_pyarray(py), mask.into_pyarray(py))
     }
 
+    /// Ground-truth belief targets for auxiliary supervision. Training-only:
+    /// this reads hidden opponent hands, so it must never feed the policy's
+    /// observation path.
+    ///
+    /// Flat (num_games * num_policy_seats * 104) i64. For each card, from the
+    /// policy seat's perspective:
+    ///   -100        not predicted (in own hand or publicly seen),
+    ///   0..n-2      held by the opponent `label + 1` seats after us,
+    ///   n-1         in the undealt stock.
+    fn belief_targets<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<i64>> {
+        let k = self.policy_seats.len();
+        let n = self.num_players;
+        let mut out = vec![0i64; self.games.len() * k * NUM_CARDS];
+        for (g, game) in self.games.iter().enumerate() {
+            for (j, &seat) in self.policy_seats.iter().enumerate() {
+                let base = (g * k + j) * NUM_CARDS;
+                for c in 1..=NUM_CARDS as u8 {
+                    let idx = base + c as usize - 1;
+                    if set_contains(game.hand(seat), c) || set_contains(game.played(), c) {
+                        out[idx] = -100;
+                        continue;
+                    }
+                    let mut label = (n - 1) as i64; // stock unless an opponent has it
+                    for d in 1..n {
+                        if set_contains(game.hand((seat + d) % n), c) {
+                            label = (d - 1) as i64;
+                            break;
+                        }
+                    }
+                    out[idx] = label;
+                }
+            }
+        }
+        out.into_pyarray(py)
+    }
+
     /// Advance every game one simultaneous turn.
     ///
     /// `actions`: flat (num_games * num_policy_seats) card ids (1..=104).
@@ -227,5 +263,30 @@ impl VecGames {
     /// Turns remaining in the current deals (all games stay in lockstep).
     fn turns_per_deal(&self) -> usize {
         HAND_SIZE
+    }
+
+    /// Test/debug introspection: every seat's hand, per game. Reads hidden
+    /// state — never use on the observation path.
+    fn debug_hands(&self) -> Vec<Vec<Vec<u16>>> {
+        self.games
+            .iter()
+            .map(|g| {
+                (0..self.num_players)
+                    .map(|p| g.hand_cards(p).iter().map(|&c| c as u16).collect())
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Test/debug introspection: publicly revealed cards per game.
+    fn debug_played(&self) -> Vec<Vec<u16>> {
+        self.games
+            .iter()
+            .map(|g| {
+                take5_core::cards::set_iter(g.played())
+                    .map(|c| c as u16)
+                    .collect()
+            })
+            .collect()
     }
 }
