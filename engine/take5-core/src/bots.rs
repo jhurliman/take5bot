@@ -1,8 +1,13 @@
 //! Baseline bots. These are the arena's fixed measuring sticks — the neural
 //! bot must beat `mc:N` convincingly before it earns "genuinely strong".
 
-use crate::cards::{bullheads, set_iter, set_len, Card, CardSet};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
+
+use crate::cards::{bullheads, set_insert, set_iter, set_len, Card, CardSet};
 use crate::game::{Game, Phase, View, MAX_ROW_LEN, ROWS};
+use crate::neural::{NeuralNet, BELIEF_CLASSES};
+use crate::obs::{encode_view, OBS_LEN};
 use crate::rng::SplitMix64;
 
 pub trait Bot {
@@ -10,16 +15,25 @@ pub trait Bot {
     fn choose_row(&mut self, view: &View, forced: Card, rng: &mut SplitMix64) -> usize;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BotSpec {
     Random,
     Lowest,
     Greedy,
-    McRollout { worlds: u32 },
+    McRollout {
+        worlds: u32,
+    },
+    /// Trained net + belief-guided determinized search. `worlds == 0` plays
+    /// the raw policy argmax (no search).
+    Neural {
+        path: String,
+        worlds: u32,
+    },
 }
 
 impl BotSpec {
-    /// Parse "random" | "lowest" | "greedy" | "mc" | "mc:<worlds>".
+    /// Parse "random" | "lowest" | "greedy" | "mc" | "mc:<worlds>" |
+    /// "neural:<weights-path>[:<worlds>]".
     pub fn parse(s: &str) -> Option<BotSpec> {
         match s {
             "random" => Some(BotSpec::Random),
@@ -27,6 +41,26 @@ impl BotSpec {
             "greedy" => Some(BotSpec::Greedy),
             "mc" => Some(BotSpec::McRollout { worlds: 64 }),
             _ => {
+                if let Some(rest) = s.strip_prefix("neural:") {
+                    // Optional trailing ":<worlds>"; the path may not
+                    // contain further colons in that case.
+                    return Some(match rest.rsplit_once(':') {
+                        Some((path, w)) => match w.parse() {
+                            Ok(worlds) => BotSpec::Neural {
+                                path: path.to_string(),
+                                worlds,
+                            },
+                            Err(_) => BotSpec::Neural {
+                                path: rest.to_string(),
+                                worlds: 32,
+                            },
+                        },
+                        None => BotSpec::Neural {
+                            path: rest.to_string(),
+                            worlds: 32,
+                        },
+                    });
+                }
                 let worlds = s.strip_prefix("mc:")?.parse().ok()?;
                 Some(BotSpec::McRollout { worlds })
             }
@@ -34,13 +68,36 @@ impl BotSpec {
     }
 
     pub fn build(&self) -> Box<dyn Bot + Send + Sync> {
-        match *self {
+        match self {
             BotSpec::Random => Box::new(RandomBot),
             BotSpec::Lowest => Box::new(LowestBot),
             BotSpec::Greedy => Box::new(GreedyBot),
-            BotSpec::McRollout { worlds } => Box::new(McRolloutBot { worlds }),
+            BotSpec::McRollout { worlds } => Box::new(McRolloutBot { worlds: *worlds }),
+            BotSpec::Neural { path, worlds } => Box::new(NeuralSearchBot {
+                net: load_cached_net(path),
+                worlds: *worlds,
+            }),
         }
     }
+}
+
+/// Process-wide weight cache: the arena builds bots per game, and reloading
+/// a multi-megabyte net for each would dwarf the games themselves.
+fn load_cached_net(path: &str) -> Arc<NeuralNet> {
+    static CACHE: OnceLock<Mutex<HashMap<String, Arc<NeuralNet>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut map = cache.lock().expect("net cache lock");
+    if let Some(net) = map.get(path) {
+        return net.clone();
+    }
+    let bytes =
+        std::fs::read(path).unwrap_or_else(|e| panic!("failed to read net weights {path}: {e}"));
+    let net = Arc::new(
+        NeuralNet::from_bytes(&bytes)
+            .unwrap_or_else(|e| panic!("failed to parse net weights {path}: {e:?}")),
+    );
+    map.insert(path.to_string(), net.clone());
+    net
 }
 
 // ------------------------------------------------------------ shared logic
@@ -245,6 +302,183 @@ impl Bot for McRolloutBot {
         // Taking the cheapest row is near-optimal; the interesting decision
         // (which card to play) is handled above. Revisit if the arena ever
         // shows this mattering.
+        min_row_bulls(view.rows).0
+    }
+}
+
+/// Neural bot: raw policy argmax when `worlds == 0`, else one-ply
+/// expectimax over belief-sampled determinizations with value bootstrap.
+///
+/// Per world: sample opponent hands from the belief head (capacity-
+/// constrained), let opponents pick cards by sampling their own policy,
+/// then score every own candidate by (this turn's relative bull delta +
+/// value head of the resulting state). Averages over worlds; plays argmax.
+pub struct NeuralSearchBot {
+    pub net: Arc<NeuralNet>,
+    pub worlds: u32,
+}
+
+impl NeuralSearchBot {
+    fn policy_argmax(out_logits: &[f32], hand: CardSet) -> Card {
+        set_iter(hand)
+            .max_by(|&a, &b| {
+                out_logits[a as usize - 1]
+                    .partial_cmp(&out_logits[b as usize - 1])
+                    .expect("logits are finite")
+            })
+            .expect("hand is non-empty")
+    }
+
+    fn sample_masked_policy(logits: &[f32], hand: CardSet, rng: &mut SplitMix64) -> Card {
+        let cards: Vec<Card> = set_iter(hand).collect();
+        let max = cards
+            .iter()
+            .map(|&c| logits[c as usize - 1])
+            .fold(f32::NEG_INFINITY, f32::max);
+        let weights: Vec<f64> = cards
+            .iter()
+            .map(|&c| ((logits[c as usize - 1] - max).exp()) as f64)
+            .collect();
+        cards[weighted_choice(&weights, rng)]
+    }
+
+    /// Sample a full deal consistent with `view`, assigning each unseen card
+    /// to an opponent or the stock according to the belief head, under the
+    /// hard constraint that every opponent holds exactly `hand_count` cards.
+    fn sample_world(
+        &self,
+        view: &View,
+        belief: &crate::neural::NeuralOutput,
+        rng: &mut SplitMix64,
+    ) -> Game {
+        let n = view.num_players as usize;
+        let me = view.player as usize;
+        let hand_count = set_len(view.hand) as usize;
+        let mut order: Vec<Card> = set_iter(view.unseen()).collect();
+        rng.shuffle(&mut order);
+
+        let mut caps = [0usize; BELIEF_CLASSES];
+        caps[..n - 1].fill(hand_count);
+        caps[BELIEF_CLASSES - 1] = order.len() - (n - 1) * hand_count;
+
+        let mut hands = vec![0 as CardSet; n];
+        hands[me] = view.hand;
+        for &card in &order {
+            let probs = NeuralNet::belief_probs(belief, card as usize - 1);
+            let weights: Vec<f64> = (0..BELIEF_CLASSES)
+                .map(|k| {
+                    if caps[k] > 0 {
+                        probs[k] as f64 + 1e-6
+                    } else {
+                        0.0
+                    }
+                })
+                .collect();
+            let class = weighted_choice(&weights, rng);
+            caps[class] -= 1;
+            if class < BELIEF_CLASSES - 1 {
+                set_insert(&mut hands[(me + class + 1) % n], card);
+            }
+        }
+
+        Game::from_position(
+            hands,
+            view.rows.clone(),
+            view.penalties.to_vec(),
+            view.played,
+            view.turn,
+        )
+        .expect("view state is always valid")
+    }
+}
+
+/// Index sampled proportionally to `weights` (at least one must be > 0).
+fn weighted_choice(weights: &[f64], rng: &mut SplitMix64) -> usize {
+    let total: f64 = weights.iter().sum();
+    debug_assert!(total > 0.0);
+    let mut r = (rng.next_u64() as f64 / u64::MAX as f64) * total;
+    for (i, &w) in weights.iter().enumerate() {
+        r -= w;
+        if r <= 0.0 && w > 0.0 {
+            return i;
+        }
+    }
+    weights
+        .iter()
+        .rposition(|&w| w > 0.0)
+        .expect("positive weight")
+}
+
+impl Bot for NeuralSearchBot {
+    fn choose_card(&mut self, view: &View, rng: &mut SplitMix64) -> Card {
+        let candidates: Vec<Card> = set_iter(view.hand).collect();
+        if candidates.len() == 1 {
+            return candidates[0];
+        }
+        let mut obs = vec![0.0f32; OBS_LEN];
+        encode_view(view, None, &mut obs);
+        let root = self.net.forward(&obs);
+
+        let n = view.num_players as usize;
+        // The belief head is trained for 4 players; elsewhere play raw policy.
+        if self.worlds == 0 || n != 4 {
+            return Self::policy_argmax(&root.policy_logits, view.hand);
+        }
+
+        let me = view.player as usize;
+        let start: Vec<u16> = view.penalties.to_vec();
+        let mut totals = vec![0.0f64; candidates.len()];
+        let mut scratch = vec![0.0f32; OBS_LEN];
+
+        for _ in 0..self.worlds {
+            let world = self.sample_world(view, &root, rng);
+            // Opponents choose simultaneously: their cards cannot depend on
+            // ours, so sample once per world and reuse for every candidate.
+            let mut opp_cards: Vec<Card> = vec![0; n];
+            for (seat, card) in opp_cards.iter_mut().enumerate() {
+                if seat == me {
+                    continue;
+                }
+                encode_view(&world.view(seat), None, &mut scratch);
+                let out = self.net.forward(&scratch);
+                *card = Self::sample_masked_policy(&out.policy_logits, world.hand(seat), rng);
+            }
+
+            for (i, &candidate) in candidates.iter().enumerate() {
+                let mut g = world.clone();
+                let mut cards = opp_cards.clone();
+                cards[me] = candidate;
+                g.play_cards(&cards).expect("candidate is legal");
+                while let Phase::ChooseRow { .. } = g.phase() {
+                    let row = min_row_bulls(g.rows()).0;
+                    g.choose_row(row).expect("row choice is legal");
+                }
+                let my_delta = (g.penalties()[me] - start[me]) as f64;
+                let opp_delta: f64 = (0..n)
+                    .filter(|&p| p != me)
+                    .map(|p| (g.penalties()[p] - start[p]) as f64)
+                    .sum();
+                let reward = opp_delta / (n - 1) as f64 - my_delta;
+                let future = if g.is_terminal() {
+                    0.0
+                } else {
+                    encode_view(&g.view(me), None, &mut scratch);
+                    self.net.forward(&scratch).value as f64
+                };
+                totals[i] += reward + future;
+            }
+        }
+
+        let best = totals
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).expect("scores are finite"))
+            .expect("candidates is non-empty")
+            .0;
+        candidates[best]
+    }
+
+    fn choose_row(&mut self, view: &View, _forced: Card, _rng: &mut SplitMix64) -> usize {
         min_row_bulls(view.rows).0
     }
 }

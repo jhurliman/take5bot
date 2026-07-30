@@ -9,10 +9,12 @@ pub mod arena;
 pub mod bots;
 pub mod cards;
 pub mod game;
+pub mod neural;
 pub mod obs;
 pub mod rng;
 
 pub use cards::{bullheads, Card, NUM_CARDS};
 pub use game::{Game, GameError, Phase, View, HAND_SIZE, MAX_PLAYERS, MAX_ROW_LEN, ROWS};
-pub use obs::{encode_observation, OBS_LEN};
+pub use neural::{NeuralNet, NeuralOutput};
+pub use obs::{encode_observation, encode_view, OBS_LEN};
 pub use rng::SplitMix64;

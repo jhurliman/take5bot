@@ -73,7 +73,15 @@ Heuristic-only games run at ~1.1M games/s on a desktop CPU; `mc:64` plays
       + belief head: auxiliary cross-entropy predicting, per unseen card,
       which opponent holds it or whether it is in the stock. Targets come
       from `VecGames.belief_targets()` (training-only hidden-state read).
-- [ ] M5: Belief-guided search; WASM build; browser integration
+- [x] M5a: Belief-guided determinized search at inference. Pure-Rust
+      inference of the trained net (`take5-core/src/neural.rs`, exported by
+      `training/export_net.py`, torch-parity-tested); `NeuralSearchBot` does
+      one-ply expectimax over belief-sampled worlds with value bootstrap.
+      Arena spec: `neural:<weights>[:worlds]` (`:0` = raw policy).
+      **Result: beats 3x mc:64** (11.2 vs 12.2-12.9 mean penalty, 29.3% win
+      over 1500 games); mixed field: neural:32 9.5 > mc:64 10.6 >
+      neural:0 12.6 > greedy 16.4.
+- [ ] M5b: WASM build; browser integration
 
 ### Training notes (M3)
 

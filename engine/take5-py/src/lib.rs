@@ -150,6 +150,24 @@ fn obs_len() -> usize {
     OBS_LEN
 }
 
+/// Test helper: run the Rust forward pass on one observation.
+/// Returns (policy_logits[104], value, belief_logits[416]).
+#[pyfunction]
+fn debug_neural_eval(path: &str, obs: Vec<f32>) -> PyResult<(Vec<f32>, f32, Vec<f32>)> {
+    if obs.len() != OBS_LEN {
+        return Err(PyValueError::new_err(format!(
+            "expected {OBS_LEN} obs values, got {}",
+            obs.len()
+        )));
+    }
+    let bytes = std::fs::read(path)
+        .map_err(|e| PyValueError::new_err(format!("failed to read {path}: {e}")))?;
+    let net = take5_core::NeuralNet::from_bytes(&bytes)
+        .map_err(|e| PyValueError::new_err(format!("failed to parse {path}: {e:?}")))?;
+    let out = net.forward(&obs);
+    Ok((out.policy_logits.to_vec(), out.value, out.belief_logits))
+}
+
 #[pyfunction]
 fn bullheads(card: u8) -> PyResult<u8> {
     if !(1..=NUM_CARDS as u8).contains(&card) {
@@ -222,6 +240,7 @@ fn take5_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Game>()?;
     m.add_class::<VecGames>()?;
     m.add_function(wrap_pyfunction!(obs_len, m)?)?;
+    m.add_function(wrap_pyfunction!(debug_neural_eval, m)?)?;
     m.add_function(wrap_pyfunction!(bullheads, m)?)?;
     m.add_function(wrap_pyfunction!(run_arena, m)?)?;
     Ok(())
