@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, RefreshCw, Play, Settings2 } from "lucide-react";
+import { X, RefreshCw, Play, Settings2, Lightbulb } from "lucide-react";
 import type { EngineBot } from "./engine/pkg/take5_wasm";
-import { createEngineBot, engineChooseCard, loadEngine } from "./engine/bots";
+import { createEngineBot, engineAnalyze, engineChooseCard, loadEngine } from "./engine/bots";
 
 /**
  * Take 5 (a.k.a. 6 nimmt!) – Web Frontend
@@ -247,7 +247,11 @@ export default function Take5App() {
   const [state, setState] = useState<GameState>(() => deal(playersCount, seed, "neural"));
   const [showSettings, setShowSettings] = useState(false);
   const [botsLoading, setBotsLoading] = useState(false);
+  const [coach, setCoach] = useState(false);
+  const [coachHints, setCoachHints] = useState<Map<number, number> | null>(null);
+  const [coachThinking, setCoachThinking] = useState(false);
   const engineBots = useRef<Map<PlayerId, EngineBot>>(new Map());
+  const coachBot = useRef<EngineBot | null>(null);
 
   function disposeEngineBots() {
     for (const bot of engineBots.current.values()) bot.free();
@@ -289,6 +293,35 @@ export default function Take5App() {
       turn: current.turn,
     };
   }
+
+  // Coach mode: score the human's hand with the neural search bot whenever
+  // a fresh choice is on the table.
+  useEffect(() => {
+    if (!coach || state.phase !== "choose") {
+      setCoachHints(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      setCoachThinking(true);
+      try {
+        await loadEngine(true);
+        coachBot.current ??= createEngineBot("neural", Math.floor(Math.random() * 1e9));
+        // Let the spinner paint before the (main-thread) search runs.
+        await new Promise(r => setTimeout(r, 30));
+        if (cancelled) return;
+        const scores = engineAnalyze(coachBot.current, seatView(state, 0));
+        if (!cancelled) setCoachHints(scores);
+      } catch (e) {
+        console.error("coach failed", e);
+        if (!cancelled) setCoach(false);
+      } finally {
+        if (!cancelled) setCoachThinking(false);
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [coach, state.phase, state.turn]);
 
   // --- Actions ---
   function onChooseCard(card: Card) {
@@ -434,6 +467,9 @@ export default function Take5App() {
         seed={seed}
         state={state}
         onOpenSettings={() => setShowSettings(true)}
+        coach={coach}
+        coachThinking={coachThinking}
+        onToggleCoach={() => setCoach(c => !c)}
       />
 
       <div className="flex-1 grid grid-rows-[auto_1fr_auto] gap-3 px-3 pb-3">
@@ -465,6 +501,7 @@ export default function Take5App() {
             chosen={you.chosen?.id}
             onChoose={onChooseCard}
             disabled={state.phase !== "choose"}
+            hints={coach ? coachHints : null}
           />
 
           <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-2 text-xs text-slate-400">
@@ -507,8 +544,9 @@ export default function Take5App() {
 }
 
 // ---------- Pieces ----------
-function TopBar({ onNew, seed, state, onOpenSettings }:{
-  onNew:()=>void; seed:number; state:GameState; onOpenSettings:()=>void
+function TopBar({ onNew, seed, state, onOpenSettings, coach, coachThinking, onToggleCoach }:{
+  onNew:()=>void; seed:number; state:GameState; onOpenSettings:()=>void;
+  coach:boolean; coachThinking:boolean; onToggleCoach:()=>void;
 }) {
   const totalCardsOnTable = state.rows.reduce((a, r) => a + r.length, 0);
   return (
@@ -518,6 +556,13 @@ function TopBar({ onNew, seed, state, onOpenSettings }:{
         <div className="text-xs text-slate-400">seed {seed}</div>
         <div className="text-xs text-slate-400">table {totalCardsOnTable} cards</div>
         <div className="flex-1" />
+        <button
+          onClick={onToggleCoach}
+          title="Coach: the trained bot scores your options"
+          className={`flex items-center gap-2 text-sm px-3 py-1.5 rounded-xl ${coach ? "bg-amber-600 hover:bg-amber-500" : "bg-slate-800 hover:bg-slate-700"}`}
+        >
+          <Lightbulb className="w-4 h-4"/> {coachThinking ? "Thinking…" : "Coach"}
+        </button>
         <button onClick={onNew} className="flex items-center gap-2 text-sm px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700">
           <RefreshCw className="w-4 h-4"/> New game
         </button>
@@ -554,20 +599,38 @@ function Table({ rows }:{ rows:[Row, Row, Row, Row] }) {
   );
 }
 
-function Hand({ cards, chosen, onChoose, disabled }:{
-  cards:Card[]; chosen?:number; onChoose:(c:Card)=>void; disabled?:boolean
+function Hand({ cards, chosen, onChoose, disabled, hints }:{
+  cards:Card[]; chosen?:number; onChoose:(c:Card)=>void; disabled?:boolean;
+  hints?:Map<number, number> | null;
 }){
+  // Coach badges show each card's expected cost in bulls relative to the
+  // best option (0 = the bot's pick).
+  const best = hints && hints.size ? Math.max(...hints.values()) : null;
   return (
     <div className="bg-slate-900/60 rounded-2xl p-2 shadow-inner">
-      <div className="text-xs text-slate-400 mb-1">Your hand ({cards.length})</div>
-      <div className="flex gap-2 overflow-x-auto">
-        {cards.map(c => (
-          <button key={c.id} onClick={() => !disabled && onChoose(c)} disabled={disabled}
-            className={`relative ${chosen===c.id?"ring-2 ring-emerald-500":"ring-0"} rounded-xl`}>
-            <CardView card={c} small />
-            {chosen===c.id && (<div className="absolute -top-1 -right-1 bg-emerald-600 text-[10px] px-1.5 py-0.5 rounded-full">Selected</div>)}
-          </button>
-        ))}
+      <div className="text-xs text-slate-400 mb-1">
+        Your hand ({cards.length}){hints && best !== null && (
+          <span className="ml-2 text-amber-400">coach: ★ best, −n bulls vs best</span>
+        )}
+      </div>
+      <div className="flex gap-2 overflow-x-auto pt-2">
+        {cards.map(c => {
+          const score = hints?.get(c.id);
+          const delta = best !== null && score !== undefined ? score - best : null;
+          const isBest = delta !== null && delta > -1e-6;
+          return (
+            <button key={c.id} onClick={() => !disabled && onChoose(c)} disabled={disabled}
+              className={`relative ${chosen===c.id?"ring-2 ring-emerald-500":isBest?"ring-2 ring-amber-500":"ring-0"} rounded-xl`}>
+              <CardView card={c} small />
+              {chosen===c.id && (<div className="absolute -top-1 -right-1 bg-emerald-600 text-[10px] px-1.5 py-0.5 rounded-full z-10">Selected</div>)}
+              {delta !== null && (
+                <div className={`absolute -top-2 left-1/2 -translate-x-1/2 text-[10px] px-1.5 py-0.5 rounded-full ${isBest ? "bg-amber-500 text-slate-950" : "bg-slate-700 text-slate-200"}`}>
+                  {isBest ? "★" : delta.toFixed(1)}
+                </div>
+              )}
+            </button>
+          );
+        })}
       </div>
     </div>
   );

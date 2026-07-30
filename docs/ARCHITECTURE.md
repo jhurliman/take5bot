@@ -86,7 +86,10 @@ Heuristic-only games run at ~1.1M games/s on a desktop CPU; `mc:64` plays
       integration: the web UI's bot difficulty setting now offers Random /
       Greedy (TS heuristics) and Search (mc:64) / Neural (trained net +
       belief search, weights fetched from `public/net.t5n`) running the
-      real engine in WASM. Verified in a Node runtime smoke test.
+      real engine in WASM. Verified in a Node runtime smoke test. Coach
+      mode (toolbar lightbulb) scores the human's hand with the neural
+      search bot (`NeuralSearchBot::analyze`) and badges each card with its
+      expected bull cost relative to the bot's pick.
 
 ### Training notes (M3)
 

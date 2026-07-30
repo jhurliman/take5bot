@@ -16,6 +16,38 @@ export class EngineBot {
         wasm.__wbg_enginebot_free(ptr, 0);
     }
     /**
+     * Coach mode: score every legal card (higher = better). Returns a flat
+     * Float32Array of (card_id, score) pairs. Neural bots only.
+     * @param {number} player
+     * @param {number} num_players
+     * @param {Uint8Array} hand
+     * @param {Uint8Array} rows_flat
+     * @param {Uint8Array} row_lens
+     * @param {Uint16Array} penalties
+     * @param {Uint8Array} played
+     * @param {number} turn
+     * @returns {Float32Array}
+     */
+    analyze(player, num_players, hand, rows_flat, row_lens, penalties, played, turn) {
+        const ptr0 = passArray8ToWasm0(hand, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray8ToWasm0(rows_flat, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passArray8ToWasm0(row_lens, wasm.__wbindgen_malloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ptr3 = passArray16ToWasm0(penalties, wasm.__wbindgen_malloc);
+        const len3 = WASM_VECTOR_LEN;
+        const ptr4 = passArray8ToWasm0(played, wasm.__wbindgen_malloc);
+        const len4 = WASM_VECTOR_LEN;
+        const ret = wasm.enginebot_analyze(this.__wbg_ptr, player, num_players, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, turn);
+        if (ret[3]) {
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        var v6 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v6;
+    }
+    /**
      * Pick a card to play from `hand`, given everything this seat can see.
      * `played` must contain every publicly revealed card (all cards
      * currently in rows plus every card in any penalty pile).
@@ -136,6 +168,19 @@ const EngineBotFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_enginebot_free(ptr, 1));
 
+function getArrayF32FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getFloat32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
+}
+
+let cachedFloat32ArrayMemory0 = null;
+function getFloat32ArrayMemory0() {
+    if (cachedFloat32ArrayMemory0 === null || cachedFloat32ArrayMemory0.byteLength === 0) {
+        cachedFloat32ArrayMemory0 = new Float32Array(wasm.memory.buffer);
+    }
+    return cachedFloat32ArrayMemory0;
+}
+
 function getStringFromWasm0(ptr, len) {
     return decodeText(ptr >>> 0, len);
 }
@@ -251,6 +296,7 @@ function __wbg_finalize_init(instance, module) {
     wasmInstance = instance;
     wasm = instance.exports;
     wasmModule = module;
+    cachedFloat32ArrayMemory0 = null;
     cachedUint16ArrayMemory0 = null;
     cachedUint8ArrayMemory0 = null;
     wasm.__wbindgen_start();

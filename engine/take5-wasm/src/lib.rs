@@ -41,11 +41,25 @@ fn to_rows(rows_flat: &[u8], row_lens: &[u8]) -> Result<[Vec<u8>; ROWS], JsError
     Ok(rows)
 }
 
+enum Inner {
+    Generic(Box<dyn Bot + Send + Sync>),
+    Neural(NeuralSearchBot),
+}
+
+impl Inner {
+    fn as_bot(&mut self) -> &mut dyn Bot {
+        match self {
+            Inner::Generic(b) => b.as_mut(),
+            Inner::Neural(b) => b,
+        }
+    }
+}
+
 /// A bot the browser can consult. Specs: "random" | "lowest" | "greedy" |
 /// "mc:<worlds>" | "neural:<worlds>" (neural requires the weights blob).
 #[wasm_bindgen]
 pub struct EngineBot {
-    inner: Box<dyn Bot + Send + Sync>,
+    inner: Inner,
     rng: SplitMix64,
 }
 
@@ -53,14 +67,14 @@ pub struct EngineBot {
 impl EngineBot {
     #[wasm_bindgen(constructor)]
     pub fn new(spec: &str, weights: Option<Box<[u8]>>, seed: u64) -> Result<EngineBot, JsError> {
-        let inner: Box<dyn Bot + Send + Sync> = if let Some(rest) = spec.strip_prefix("neural:") {
+        let inner: Inner = if let Some(rest) = spec.strip_prefix("neural:") {
             let worlds: u32 = rest
                 .parse()
                 .map_err(|_| JsError::new("neural spec must be neural:<worlds>"))?;
             let bytes = weights.ok_or_else(|| JsError::new("neural bot requires weights"))?;
             let net = NeuralNet::from_bytes(&bytes)
                 .map_err(|e| JsError::new(&format!("bad weights: {e:?}")))?;
-            Box::new(NeuralSearchBot {
+            Inner::Neural(NeuralSearchBot {
                 net: std::sync::Arc::new(net),
                 worlds,
             })
@@ -70,7 +84,7 @@ impl EngineBot {
             if matches!(parsed, BotSpec::Neural { .. }) {
                 return Err(JsError::new("use neural:<worlds> with weights in WASM"));
             }
-            parsed.build()
+            Inner::Generic(parsed.build())
         };
         Ok(EngineBot {
             inner,
@@ -109,7 +123,7 @@ impl EngineBot {
             penalties,
             turn,
         };
-        Ok(self.inner.choose_card(&view, &mut self.rng))
+        Ok(self.inner.as_bot().choose_card(&view, &mut self.rng))
     }
 
     /// Pick which row to take when `forced` card is below every row end.
@@ -136,7 +150,49 @@ impl EngineBot {
             penalties,
             turn,
         };
-        Ok(self.inner.choose_row(&view, forced, &mut self.rng) as u8)
+        Ok(self.inner.as_bot().choose_row(&view, forced, &mut self.rng) as u8)
+    }
+}
+
+#[wasm_bindgen]
+impl EngineBot {
+    /// Coach mode: score every legal card (higher = better). Returns a flat
+    /// Float32Array of (card_id, score) pairs. Neural bots only.
+    #[allow(clippy::too_many_arguments)]
+    pub fn analyze(
+        &mut self,
+        player: u8,
+        num_players: u8,
+        hand: &[u8],
+        rows_flat: &[u8],
+        row_lens: &[u8],
+        penalties: &[u16],
+        played: &[u8],
+        turn: u8,
+    ) -> Result<Vec<f32>, JsError> {
+        let Inner::Neural(bot) = &mut self.inner else {
+            return Err(JsError::new("analyze requires a neural bot"));
+        };
+        if hand.is_empty() {
+            return Err(JsError::new("hand is empty"));
+        }
+        let rows = to_rows(rows_flat, row_lens)?;
+        let view = View {
+            player,
+            num_players,
+            hand: to_set(hand)?,
+            played: to_set(played)?,
+            rows: &rows,
+            penalties,
+            turn,
+        };
+        let scored = bot.analyze(&view, &mut self.rng);
+        let mut out = Vec::with_capacity(scored.len() * 2);
+        for (card, score) in scored {
+            out.push(card as f32);
+            out.push(score as f32);
+        }
+        Ok(out)
     }
 }
 

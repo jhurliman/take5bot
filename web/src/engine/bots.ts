@@ -43,6 +43,29 @@ export interface SeatView {
   turn: number; // 0..9
 }
 
+/** Coach mode: per-card scores (higher = better) from a neural bot. */
+export function engineAnalyze(bot: EngineBot, view: SeatView): Map<number, number> {
+  const rowsFlat: number[] = [];
+  const rowLens: number[] = [];
+  for (const row of view.rows) {
+    rowLens.push(row.length);
+    rowsFlat.push(...row);
+  }
+  const flat = bot.analyze(
+    view.player,
+    view.numPlayers,
+    Uint8Array.from(view.hand),
+    Uint8Array.from(rowsFlat),
+    Uint8Array.from(rowLens),
+    Uint16Array.from(view.penalties),
+    Uint8Array.from(view.played),
+    view.turn,
+  );
+  const scores = new Map<number, number>();
+  for (let i = 0; i < flat.length; i += 2) scores.set(flat[i], flat[i + 1]);
+  return scores;
+}
+
 export function engineChooseCard(bot: EngineBot, view: SeatView): number {
   const rowsFlat: number[] = [];
   const rowLens: number[] = [];

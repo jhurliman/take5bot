@@ -319,16 +319,6 @@ pub struct NeuralSearchBot {
 }
 
 impl NeuralSearchBot {
-    fn policy_argmax(out_logits: &[f32], hand: CardSet) -> Card {
-        set_iter(hand)
-            .max_by(|&a, &b| {
-                out_logits[a as usize - 1]
-                    .partial_cmp(&out_logits[b as usize - 1])
-                    .expect("logits are finite")
-            })
-            .expect("hand is non-empty")
-    }
-
     fn sample_masked_policy(logits: &[f32], hand: CardSet, rng: &mut SplitMix64) -> Card {
         let cards: Vec<Card> = set_iter(hand).collect();
         let max = cards
@@ -409,20 +399,24 @@ fn weighted_choice(weights: &[f64], rng: &mut SplitMix64) -> usize {
         .expect("positive weight")
 }
 
-impl Bot for NeuralSearchBot {
-    fn choose_card(&mut self, view: &View, rng: &mut SplitMix64) -> Card {
+impl NeuralSearchBot {
+    /// Score every legal card: the mean over sampled worlds of (this turn's
+    /// relative bull delta + value-head estimate of the resulting state).
+    /// Higher is better. With `worlds == 0` (or a non-4-player table, where
+    /// the belief head doesn't apply) scores are raw policy logits — same
+    /// ranking the argmax bot uses. Also powers the web UI's coach mode.
+    pub fn analyze(&mut self, view: &View, rng: &mut SplitMix64) -> Vec<(Card, f64)> {
         let candidates: Vec<Card> = set_iter(view.hand).collect();
-        if candidates.len() == 1 {
-            return candidates[0];
-        }
         let mut obs = vec![0.0f32; OBS_LEN];
         encode_view(view, None, &mut obs);
         let root = self.net.forward(&obs);
 
         let n = view.num_players as usize;
-        // The belief head is trained for 4 players; elsewhere play raw policy.
-        if self.worlds == 0 || n != 4 {
-            return Self::policy_argmax(&root.policy_logits, view.hand);
+        if self.worlds == 0 || n != 4 || candidates.len() == 1 {
+            return candidates
+                .iter()
+                .map(|&c| (c, root.policy_logits[c as usize - 1] as f64))
+                .collect();
         }
 
         let me = view.player as usize;
@@ -469,13 +463,20 @@ impl Bot for NeuralSearchBot {
             }
         }
 
-        let best = totals
-            .iter()
-            .enumerate()
-            .max_by(|a, b| a.1.partial_cmp(b.1).expect("scores are finite"))
-            .expect("candidates is non-empty")
-            .0;
-        candidates[best]
+        candidates
+            .into_iter()
+            .zip(totals.into_iter().map(|t| t / self.worlds as f64))
+            .collect()
+    }
+}
+
+impl Bot for NeuralSearchBot {
+    fn choose_card(&mut self, view: &View, rng: &mut SplitMix64) -> Card {
+        self.analyze(view, rng)
+            .into_iter()
+            .max_by(|a, b| a.1.partial_cmp(&b.1).expect("scores are finite"))
+            .expect("hand is non-empty")
+            .0
     }
 
     fn choose_row(&mut self, view: &View, _forced: Card, _rng: &mut SplitMix64) -> usize {
