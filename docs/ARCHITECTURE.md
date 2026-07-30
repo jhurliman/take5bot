@@ -60,6 +60,30 @@ of card id. The schema supports 2-10 players from day one.
 Heuristic-only games run at ~1.1M games/s on a desktop CPU; `mc:64` plays
 ~700 full games/s including its internal search.
 
+## Performance (browser WASM, and why not WebGPU)
+
+Measured on the release WASM build (Node 22 runtime, f16 `net.t5n`,
+`neural:16`, i.e. 16 belief-sampled worlds — the browser's setting), 20
+timed `choose_card` calls per scenario:
+
+| scenario | per-move latency (mean, tight spread) |
+| --- | --- |
+| mid-game, 5-card hand (turn 5) | ~63 ms |
+| worst case: 10-card hand (turn 0) | ~103 ms |
+
+Enabling WASM SIMD (`RUSTFLAGS='-C target-feature=+simd128'`) was measured
+and made no difference (62.6 vs 62.5 ms mean), so it is not part of the
+build. The net is a 512-wide 2-block MLP (~1.4 MFLOPs/forward; a move runs
+a few hundred forwards), which scalar WASM already handles in ~100 ms worst
+case.
+
+**Verdict: WebGPU is unnecessary at this model size.** GPU dispatch
+overhead and weight upload would likely cost more than they save for
+1.4 MFLOP forwards, and the latency is already well under perceptible
+"thinking time" for a card game. If UI smoothness ever matters (the search
+currently runs on the main thread and can block a frame for ~100 ms), the
+right next step is moving the bot into a Web Worker — not GPU inference.
+
 ## Milestones
 
 - [x] M1: Rust engine, parity with legacy implementation, Python bindings
