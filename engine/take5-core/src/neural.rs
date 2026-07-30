@@ -12,8 +12,36 @@ use crate::obs::OBS_LEN;
 pub const POLICY_OUT: usize = crate::cards::NUM_CARDS;
 pub const BELIEF_CLASSES: usize = 4; // 3 opponents + stock (4-player nets)
 pub const BELIEF_OUT: usize = POLICY_OUT * BELIEF_CLASSES;
-const MAGIC: u32 = 0x5435_4E31; // "T5N1"
+const MAGIC_V1: u32 = 0x5435_4E31; // "T5N1": f32 weights
+const MAGIC_V2: u32 = 0x5435_4E32; // "T5N2": header gains a dtype field
+const DTYPE_F32: u32 = 0;
+const DTYPE_F16: u32 = 1;
 const LN_EPS: f32 = 1e-5;
+
+/// IEEE 754 half -> single precision (handles subnormals/inf/nan).
+fn f16_to_f32(h: u16) -> f32 {
+    let sign = (h >> 15) as u32;
+    let exp = ((h >> 10) & 0x1F) as u32;
+    let frac = (h & 0x3FF) as u32;
+    let bits = if exp == 0 {
+        if frac == 0 {
+            sign << 31
+        } else {
+            let mut e = 127 - 15 + 1;
+            let mut f = frac;
+            while f & 0x400 == 0 {
+                f <<= 1;
+                e -= 1;
+            }
+            (sign << 31) | ((e as u32) << 23) | ((f & 0x3FF) << 13)
+        }
+    } else if exp == 31 {
+        (sign << 31) | (0xFF << 23) | (frac << 13)
+    } else {
+        (sign << 31) | ((exp + 127 - 15) << 23) | (frac << 13)
+    };
+    f32::from_bits(bits)
+}
 
 struct Linear {
     w: Vec<f32>, // [out][inp] row-major
@@ -81,6 +109,7 @@ pub enum NeuralError {
 struct Reader<'a> {
     data: &'a [u8],
     pos: usize,
+    dtype: u32,
 }
 
 impl<'a> Reader<'a> {
@@ -95,14 +124,22 @@ impl<'a> Reader<'a> {
     }
 
     fn f32s(&mut self, n: usize) -> Result<Vec<f32>, NeuralError> {
-        let end = self.pos + 4 * n;
+        let elem = if self.dtype == DTYPE_F16 { 2 } else { 4 };
+        let end = self.pos + elem * n;
         if end > self.data.len() {
             return Err(NeuralError::Truncated);
         }
-        let out = self.data[self.pos..end]
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
-            .collect();
+        let out = if self.dtype == DTYPE_F16 {
+            self.data[self.pos..end]
+                .chunks_exact(2)
+                .map(|c| f16_to_f32(u16::from_le_bytes(c.try_into().unwrap())))
+                .collect()
+        } else {
+            self.data[self.pos..end]
+                .chunks_exact(4)
+                .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+                .collect()
+        };
         self.pos = end;
         Ok(out)
     }
@@ -118,18 +155,31 @@ impl<'a> Reader<'a> {
 }
 
 impl NeuralNet {
-    /// Format: u32 magic "T5N1", u32 width, u32 blocks, u32 obs_len, then
-    /// f32 LE tensors in order: stem(w,b); per block lin1(w,b), lin2(w,b),
+    /// Format: u32 magic ("T5N1" = f32; "T5N2" adds a u32 dtype field,
+    /// 0 = f32, 1 = f16), u32 width, u32 blocks, u32 obs_len, [u32 dtype,]
+    /// then LE tensors in order: stem(w,b); per block lin1(w,b), lin2(w,b),
     /// ln gamma, ln beta; policy(w,b); value(w,b); belief(w,b). Linear
     /// weights are [out][in] row-major (PyTorch convention).
     pub fn from_bytes(data: &[u8]) -> Result<NeuralNet, NeuralError> {
-        let mut r = Reader { data, pos: 0 };
-        if r.u32()? != MAGIC {
+        let mut r = Reader {
+            data,
+            pos: 0,
+            dtype: DTYPE_F32,
+        };
+        let magic = r.u32()?;
+        if magic != MAGIC_V1 && magic != MAGIC_V2 {
             return Err(NeuralError::BadMagic);
         }
         let width = r.u32()? as usize;
         let num_blocks = r.u32()? as usize;
         let obs_len = r.u32()? as usize;
+        if magic == MAGIC_V2 {
+            let dtype = r.u32()?;
+            if dtype != DTYPE_F32 && dtype != DTYPE_F16 {
+                return Err(NeuralError::BadShape);
+            }
+            r.dtype = dtype;
+        }
         if obs_len != OBS_LEN || width == 0 || width > 8192 || num_blocks > 64 {
             return Err(NeuralError::BadShape);
         }
@@ -240,7 +290,7 @@ mod tests {
     /// Build a tiny random-ish net blob for round-trip testing.
     fn tiny_net_bytes(width: usize, blocks: usize) -> Vec<u8> {
         let mut out = Vec::new();
-        out.extend(MAGIC.to_le_bytes());
+        out.extend(MAGIC_V1.to_le_bytes());
         out.extend((width as u32).to_le_bytes());
         out.extend((blocks as u32).to_le_bytes());
         out.extend((OBS_LEN as u32).to_le_bytes());
