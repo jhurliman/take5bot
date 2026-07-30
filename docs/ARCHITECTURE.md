@@ -84,6 +84,17 @@ overhead and weight upload would likely cost more than they save for
 currently runs on the main thread and can block a frame for ~100 ms), the
 right next step is moving the bot into a Web Worker — not GPU inference.
 
+## Legacy comparison
+
+`arena/legacy_bridge.py` plays the original v1 MuZero checkpoint (LightZero,
+253-dim obs, policy-head argmax — exactly how v1's play script used it)
+against v2 engine bots by reconstructing its observation from the v2
+encoding. Result: v1 loses even to the greedy heuristic (16.1 vs 11.8 mean
+penalty, 12.4% win over 1000 games) — roughly random/lowest tier. The v2
+raw policy scores ~10.6 vs greedy (~30% win) and its search mode beats
+mc:64, i.e. the rewrite moved the bot from below-heuristic to
+above-search-baseline strength.
+
 ## Milestones
 
 - [x] M1: Rust engine, parity with legacy implementation, Python bindings
