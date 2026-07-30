@@ -659,29 +659,40 @@ function Hand({ cards, chosen, onChoose, disabled, hints }:{
   cards:Card[]; chosen?:number; onChoose:(c:Card)=>void; disabled?:boolean;
   hints?:Map<number, number> | null;
 }){
-  // Coach badges show each card's expected cost in bulls relative to the
-  // best option (0 = the bot's pick).
+  // Coach badges: ★ marks the bot's pick; every other card shows +n, the
+  // extra bulls that play is expected to cost compared with the ★ play.
   const best = hints && hints.size ? Math.max(...hints.values()) : null;
   return (
     <div className="bg-slate-900/60 rounded-2xl p-2 shadow-inner">
       <div className="text-xs text-slate-400 mb-1">
         Your hand ({cards.length}){hints && best !== null && (
-          <span className="ml-2 text-amber-400">coach: ★ best, −n bulls vs best</span>
+          <span className="ml-2 text-amber-400">
+            coach: ★ = best play · +n = extra bulls that play risks
+          </span>
         )}
       </div>
       <div className="flex gap-2 overflow-x-auto pt-2">
         {cards.map(c => {
           const score = hints?.get(c.id);
-          const delta = best !== null && score !== undefined ? score - best : null;
-          const isBest = delta !== null && delta > -1e-6;
+          // Positive cost in bulls vs the bot's pick (0 for the pick itself).
+          const cost = best !== null && score !== undefined ? best - score : null;
+          const isBest = cost !== null && cost < 1e-6;
+          const costClass =
+            cost === null || isBest
+              ? "bg-amber-500 text-slate-950"
+              : cost < 1
+                ? "bg-emerald-700 text-emerald-100"
+                : cost < 3
+                  ? "bg-amber-700 text-amber-100"
+                  : "bg-red-700 text-red-100";
           return (
             <button key={c.id} onClick={() => !disabled && onChoose(c)} disabled={disabled}
               className={`relative ${chosen===c.id?"ring-2 ring-emerald-500":isBest?"ring-2 ring-amber-500":"ring-0"} rounded-xl`}>
               <CardView card={c} small />
               {chosen===c.id && (<div className="absolute -top-1 -right-1 bg-emerald-600 text-[10px] px-1.5 py-0.5 rounded-full z-10">Selected</div>)}
-              {delta !== null && (
-                <div className={`absolute -top-2 left-1/2 -translate-x-1/2 text-[10px] px-1.5 py-0.5 rounded-full ${isBest ? "bg-amber-500 text-slate-950" : "bg-slate-700 text-slate-200"}`}>
-                  {isBest ? "★" : delta.toFixed(1)}
+              {cost !== null && (
+                <div className={`absolute -top-2 left-1/2 -translate-x-1/2 text-[10px] px-1.5 py-0.5 rounded-full ${costClass}`}>
+                  {isBest ? "★" : `+${cost.toFixed(1)}`}
                 </div>
               )}
             </button>
