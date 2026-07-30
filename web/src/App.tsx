@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, RefreshCw, Play, Settings2 } from "lucide-react";
+import type { EngineBot } from "./engine/pkg/take5_wasm";
+import { createEngineBot, engineChooseCard, loadEngine } from "./engine/bots";
 
 /**
  * Take 5 (a.k.a. 6 nimmt!) – Web Frontend
@@ -85,7 +87,18 @@ function shuffle<T>(arr: T[], rnd: () => number): T[] {
 }
 
 // ---------- Bots ----------
-type BotStrategyId = "random" | "greedy";
+type BotStrategyId = "random" | "greedy" | "mc" | "neural";
+
+const DIFFICULTIES: Array<{ id: BotStrategyId; label: string; blurb: string }> = [
+  { id: "random", label: "Random", blurb: "Plays any card" },
+  { id: "greedy", label: "Greedy", blurb: "Avoids obvious hits" },
+  { id: "mc", label: "Search", blurb: "Monte-Carlo search (Rust/WASM)" },
+  { id: "neural", label: "Neural", blurb: "Trained net + belief search" },
+];
+
+function usesEngine(strategy: BotStrategyId): boolean {
+  return strategy === "mc" || strategy === "neural";
+}
 
 function simulateCardPlacementCost(
   rows: [Row, Row, Row, Row],
@@ -191,7 +204,7 @@ function placeCardIntoRows(
 }
 
 // ---------- Game setup ----------
-function deal(players: number, seed: number): GameState {
+function deal(players: number, seed: number, difficulty: BotStrategyId): GameState {
   const rnd = xorShift32(seed);
   const deck = shuffle(makeDeck(), rnd);
   const N = Math.max(2, Math.min(10, players));
@@ -212,7 +225,7 @@ function deal(players: number, seed: number): GameState {
     isHuman: i === 0,
     hand: h,
     pen: [],
-    strategy: i === 0 ? undefined : (i % 2 ? "greedy" : "random")
+    strategy: i === 0 ? undefined : difficulty
   }));
 
   return {
@@ -229,14 +242,52 @@ function deal(players: number, seed: number): GameState {
 // ---------- UI Root ----------
 export default function Take5App() {
   const [playersCount, setPlayersCount] = useState(4);
+  const [difficulty, setDifficulty] = useState<BotStrategyId>("neural");
   const [seed, setSeed] = useState<number>(() => Math.floor(1 + Math.random() * 1e9));
-  const [state, setState] = useState<GameState>(() => deal(playersCount, seed));
+  const [state, setState] = useState<GameState>(() => deal(playersCount, seed, "neural"));
   const [showSettings, setShowSettings] = useState(false);
+  const [botsLoading, setBotsLoading] = useState(false);
+  const engineBots = useRef<Map<PlayerId, EngineBot>>(new Map());
 
-  function startNewGame(pCount = playersCount, customSeed?: number) {
+  function disposeEngineBots() {
+    for (const bot of engineBots.current.values()) bot.free();
+    engineBots.current.clear();
+  }
+
+  function startNewGame(pCount = playersCount, customSeed?: number, diff = difficulty) {
     const s = customSeed ?? Math.floor(1 + Math.random() * 1e9);
+    disposeEngineBots();
     setSeed(s);
-    setState(deal(pCount, s));
+    setState(deal(pCount, s, diff));
+  }
+
+  /** Lazily boot the WASM engine and per-seat bots for the current game. */
+  async function ensureEngineBots(current: GameState): Promise<Map<PlayerId, EngineBot>> {
+    await loadEngine(difficulty === "neural");
+    for (const p of current.players) {
+      if (!p.isHuman && usesEngine(p.strategy || difficulty) && !engineBots.current.has(p.id)) {
+        engineBots.current.set(
+          p.id,
+          createEngineBot(p.strategy === "mc" ? "mc" : "neural", current.seed + p.id),
+        );
+      }
+    }
+    return engineBots.current;
+  }
+
+  function seatView(current: GameState, pid: PlayerId) {
+    return {
+      player: pid,
+      numPlayers: current.players.length,
+      hand: current.players[pid].hand.map((c) => c.id),
+      rows: current.rows.map((r) => r.map((c) => c.id)),
+      penalties: current.players.map((p) => sumBulls(p.pen)),
+      played: [
+        ...current.rows.flat().map((c) => c.id),
+        ...current.players.flatMap((p) => p.pen.map((c) => c.id)),
+      ],
+      turn: current.turn,
+    };
   }
 
   // --- Actions ---
@@ -247,15 +298,31 @@ export default function Take5App() {
     setState(prev => ({ ...prev, players: prev.players.map(p => p.id === 0 ? { ...p, chosen: card } : p) }));
   }
 
-  function onPlaySelected() {
-    if (state.phase !== "choose") return;
+  async function onPlaySelected() {
+    if (state.phase !== "choose" || botsLoading) return;
     const you = state.players[0];
     if (!you.chosen) return;
 
-    // Bots pick
+    // Bots pick. Engine-backed strategies run in WASM; first use fetches
+    // the module (and the net weights for "neural").
+    let bots: Map<PlayerId, EngineBot> | null = null;
+    if (state.players.some(p => !p.isHuman && usesEngine(p.strategy || "greedy"))) {
+      setBotsLoading(true);
+      try {
+        bots = await ensureEngineBots(state);
+      } finally {
+        setBotsLoading(false);
+      }
+    }
     const withChoices = state.players.map(p => {
       if (p.isHuman) return p;
-      const c = botChooseCard(state, p.id, p.strategy || "greedy");
+      const strat = p.strategy || "greedy";
+      if (usesEngine(strat) && bots?.has(p.id)) {
+        const cardId = engineChooseCard(bots.get(p.id)!, seatView(state, p.id));
+        const card = p.hand.find(c => c.id === cardId);
+        if (card) return { ...p, chosen: card };
+      }
+      const c = botChooseCard(state, p.id, strat === "mc" || strat === "neural" ? "greedy" : strat);
       return { ...p, chosen: c };
     });
 
@@ -387,9 +454,9 @@ export default function Take5App() {
             <button
               onClick={onPlaySelected}
               className={`px-4 py-2 rounded-2xl shadow-md bg-emerald-600 hover:bg-emerald-500 active:scale-[.98] transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2`}
-              disabled={state.phase !== "choose" || !you.chosen}
+              disabled={state.phase !== "choose" || !you.chosen || botsLoading}
             >
-              <Play className="w-4 h-4" /> Play selected
+              <Play className="w-4 h-4" /> {botsLoading ? "Loading bot…" : "Play selected"}
             </button>
           </div>
 
@@ -424,8 +491,14 @@ export default function Take5App() {
           <SettingsDialog
             playersCount={playersCount}
             seed={seed}
+            difficulty={difficulty}
             onClose={() => setShowSettings(false)}
-            onApply={(pc, sd) => { setPlayersCount(pc); startNewGame(pc, sd); setShowSettings(false); }}
+            onApply={(pc, sd, diff) => {
+              setPlayersCount(pc);
+              setDifficulty(diff);
+              startNewGame(pc, sd, diff);
+              setShowSettings(false);
+            }}
           />
         )}
       </AnimatePresence>
@@ -666,15 +739,17 @@ function RowChoice({ rows, onPick }:{ rows:[Row,Row,Row,Row]; onPick:(idx:number
 }
 
 function SettingsDialog({
-  playersCount, seed, onClose, onApply
+  playersCount, seed, difficulty, onClose, onApply
 }:{
   playersCount:number;
   seed:number;
+  difficulty:BotStrategyId;
   onClose:()=>void;
-  onApply:(players:number, seed:number)=>void;
+  onApply:(players:number, seed:number, difficulty:BotStrategyId)=>void;
 }){
   const [localPlayers, setLocalPlayers] = useState(playersCount);
   const [localSeed, setLocalSeed] = useState(seed);
+  const [localDifficulty, setLocalDifficulty] = useState<BotStrategyId>(difficulty);
   return (
     <motion.div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-30 flex items-end md:items-center justify-center"
       initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}}>
@@ -701,6 +776,26 @@ function SettingsDialog({
             </div>
           </label>
 
+          <div className="block text-sm">
+            <div className="text-slate-300 mb-1">Bot difficulty</div>
+            <div className="grid grid-cols-2 gap-2">
+              {DIFFICULTIES.map(d => (
+                <button
+                  key={d.id}
+                  onClick={() => setLocalDifficulty(d.id)}
+                  className={`text-left rounded-xl px-3 py-2 border ${
+                    localDifficulty === d.id
+                      ? "border-emerald-500 bg-emerald-600/20"
+                      : "border-slate-700 bg-slate-800 hover:bg-slate-700"
+                  }`}
+                >
+                  <div className="text-slate-100">{d.label}</div>
+                  <div className="text-xs text-slate-400">{d.blurb}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
           <label className="block text-sm">
             <div className="text-slate-300 mb-1">Seed</div>
             <input
@@ -720,7 +815,7 @@ function SettingsDialog({
             Randomize seed
           </button>
           <button
-            onClick={()=> onApply(localPlayers, localSeed)}
+            onClick={()=> onApply(localPlayers, localSeed, localDifficulty)}
             className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white"
           >
             Start new game

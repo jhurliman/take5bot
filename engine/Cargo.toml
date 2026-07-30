@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["take5-core", "take5-py"]
+members = ["take5-core", "take5-py", "take5-wasm"]
 
 [profile.release]
 lto = true

@@ -81,7 +81,12 @@ Heuristic-only games run at ~1.1M games/s on a desktop CPU; `mc:64` plays
       **Result: beats 3x mc:64** (11.2 vs 12.2-12.9 mean penalty, 29.3% win
       over 1500 games); mixed field: neural:32 9.5 > mc:64 10.6 >
       neural:0 12.6 > greedy 16.4.
-- [ ] M5b: WASM build; browser integration
+- [x] M5b: WASM build (`engine/take5-wasm`, built by
+      `scripts/build_wasm.sh` into `web/src/engine/pkg`) and browser
+      integration: the web UI's bot difficulty setting now offers Random /
+      Greedy (TS heuristics) and Search (mc:64) / Neural (trained net +
+      belief search, weights fetched from `public/net.t5n`) running the
+      real engine in WASM. Verified in a Node runtime smoke test.
 
 ### Training notes (M3)
 

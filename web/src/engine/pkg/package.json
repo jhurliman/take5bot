@@ -1,0 +1,17 @@
+{
+  "name": "take5-wasm",
+  "type": "module",
+  "description": "WASM bindings: engine bots (greedy/mc/neural search) for the web UI.",
+  "version": "0.1.0",
+  "license": "MIT",
+  "files": [
+    "take5_wasm_bg.wasm",
+    "take5_wasm.js",
+    "take5_wasm.d.ts"
+  ],
+  "main": "take5_wasm.js",
+  "types": "take5_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
