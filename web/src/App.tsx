@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, RefreshCw, Play, Settings2 } from "lucide-react";
+import { X, RefreshCw, Play, Settings2, Lightbulb } from "lucide-react";
+import type { EngineBot } from "./engine/pkg/take5_wasm";
+import { createEngineBot, engineAnalyze, engineChooseCard, loadEngine } from "./engine/bots";
 
 /**
  * Take 5 (a.k.a. 6 nimmt!) – Web Frontend
@@ -40,6 +42,8 @@ interface PlayerState {
 
 interface GameState {
   seed: number;
+  dealNumber: number; // 1-based; a match is deals until someone reaches 66
+  totals: number[]; // bulls carried from previous deals, by player id
   turn: number; // 0..9 (10 turns)
   players: PlayerState[];
   rows: [Row, Row, Row, Row];
@@ -85,7 +89,18 @@ function shuffle<T>(arr: T[], rnd: () => number): T[] {
 }
 
 // ---------- Bots ----------
-type BotStrategyId = "random" | "greedy";
+type BotStrategyId = "random" | "greedy" | "mc" | "neural";
+
+const DIFFICULTIES: Array<{ id: BotStrategyId; label: string; blurb: string }> = [
+  { id: "random", label: "Random", blurb: "Plays any card" },
+  { id: "greedy", label: "Greedy", blurb: "Avoids obvious hits" },
+  { id: "mc", label: "Search", blurb: "Monte-Carlo search (Rust/WASM)" },
+  { id: "neural", label: "Neural", blurb: "Trained net + belief search" },
+];
+
+function usesEngine(strategy: BotStrategyId): boolean {
+  return strategy === "mc" || strategy === "neural";
+}
 
 function simulateCardPlacementCost(
   rows: [Row, Row, Row, Row],
@@ -191,7 +206,7 @@ function placeCardIntoRows(
 }
 
 // ---------- Game setup ----------
-function deal(players: number, seed: number): GameState {
+function deal(players: number, seed: number, difficulty: BotStrategyId): GameState {
   const rnd = xorShift32(seed);
   const deck = shuffle(makeDeck(), rnd);
   const N = Math.max(2, Math.min(10, players));
@@ -212,11 +227,13 @@ function deal(players: number, seed: number): GameState {
     isHuman: i === 0,
     hand: h,
     pen: [],
-    strategy: i === 0 ? undefined : (i % 2 ? "greedy" : "random")
+    strategy: i === 0 ? undefined : difficulty
   }));
 
   return {
     seed,
+    dealNumber: 1,
+    totals: Array(N).fill(0),
     turn: 0,
     players: playersState,
     rows: rowStarters as [Row, Row, Row, Row],
@@ -229,15 +246,86 @@ function deal(players: number, seed: number): GameState {
 // ---------- UI Root ----------
 export default function Take5App() {
   const [playersCount, setPlayersCount] = useState(4);
+  const [difficulty, setDifficulty] = useState<BotStrategyId>("neural");
   const [seed, setSeed] = useState<number>(() => Math.floor(1 + Math.random() * 1e9));
-  const [state, setState] = useState<GameState>(() => deal(playersCount, seed));
+  const [state, setState] = useState<GameState>(() => deal(playersCount, seed, "neural"));
   const [showSettings, setShowSettings] = useState(false);
+  const [botsLoading, setBotsLoading] = useState(false);
+  const [coach, setCoach] = useState(false);
+  const [coachHints, setCoachHints] = useState<Map<number, number> | null>(null);
+  const [coachThinking, setCoachThinking] = useState(false);
+  const engineBots = useRef<Map<PlayerId, EngineBot>>(new Map());
+  const coachBot = useRef<EngineBot | null>(null);
 
-  function startNewGame(pCount = playersCount, customSeed?: number) {
-    const s = customSeed ?? Math.floor(1 + Math.random() * 1e9);
-    setSeed(s);
-    setState(deal(pCount, s));
+  function disposeEngineBots() {
+    for (const bot of engineBots.current.values()) bot.free();
+    engineBots.current.clear();
   }
+
+  function startNewGame(pCount = playersCount, customSeed?: number, diff = difficulty) {
+    const s = customSeed ?? Math.floor(1 + Math.random() * 1e9);
+    disposeEngineBots();
+    setSeed(s);
+    setState(deal(pCount, s, diff));
+  }
+
+  /** Lazily boot the WASM engine and per-seat bots for the current game. */
+  async function ensureEngineBots(current: GameState): Promise<Map<PlayerId, EngineBot>> {
+    await loadEngine(difficulty === "neural");
+    for (const p of current.players) {
+      if (!p.isHuman && usesEngine(p.strategy || difficulty) && !engineBots.current.has(p.id)) {
+        engineBots.current.set(
+          p.id,
+          createEngineBot(p.strategy === "mc" ? "mc" : "neural", current.seed + p.id),
+        );
+      }
+    }
+    return engineBots.current;
+  }
+
+  function seatView(current: GameState, pid: PlayerId) {
+    return {
+      player: pid,
+      numPlayers: current.players.length,
+      hand: current.players[pid].hand.map((c) => c.id),
+      rows: current.rows.map((r) => r.map((c) => c.id)),
+      penalties: current.players.map((p) => sumBulls(p.pen)),
+      played: [
+        ...current.rows.flat().map((c) => c.id),
+        ...current.players.flatMap((p) => p.pen.map((c) => c.id)),
+      ],
+      turn: current.turn,
+    };
+  }
+
+  // Coach mode: score the human's hand with the neural search bot whenever
+  // a fresh choice is on the table.
+  useEffect(() => {
+    if (!coach || state.phase !== "choose") {
+      setCoachHints(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      setCoachThinking(true);
+      try {
+        await loadEngine(true);
+        coachBot.current ??= createEngineBot("neural", Math.floor(Math.random() * 1e9));
+        // Let the spinner paint before the (main-thread) search runs.
+        await new Promise(r => setTimeout(r, 30));
+        if (cancelled) return;
+        const scores = engineAnalyze(coachBot.current, seatView(state, 0));
+        if (!cancelled) setCoachHints(scores);
+      } catch (e) {
+        console.error("coach failed", e);
+        if (!cancelled) setCoach(false);
+      } finally {
+        if (!cancelled) setCoachThinking(false);
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [coach, state.phase, state.turn]);
 
   // --- Actions ---
   function onChooseCard(card: Card) {
@@ -247,15 +335,31 @@ export default function Take5App() {
     setState(prev => ({ ...prev, players: prev.players.map(p => p.id === 0 ? { ...p, chosen: card } : p) }));
   }
 
-  function onPlaySelected() {
-    if (state.phase !== "choose") return;
+  async function onPlaySelected() {
+    if (state.phase !== "choose" || botsLoading) return;
     const you = state.players[0];
     if (!you.chosen) return;
 
-    // Bots pick
+    // Bots pick. Engine-backed strategies run in WASM; first use fetches
+    // the module (and the net weights for "neural").
+    let bots: Map<PlayerId, EngineBot> | null = null;
+    if (state.players.some(p => !p.isHuman && usesEngine(p.strategy || "greedy"))) {
+      setBotsLoading(true);
+      try {
+        bots = await ensureEngineBots(state);
+      } finally {
+        setBotsLoading(false);
+      }
+    }
     const withChoices = state.players.map(p => {
       if (p.isHuman) return p;
-      const c = botChooseCard(state, p.id, p.strategy || "greedy");
+      const strat = p.strategy || "greedy";
+      if (usesEngine(strat) && bots?.has(p.id)) {
+        const cardId = engineChooseCard(bots.get(p.id)!, seatView(state, p.id));
+        const card = p.hand.find(c => c.id === cardId);
+        if (card) return { ...p, chosen: card };
+      }
+      const c = botChooseCard(state, p.id, strat === "mc" || strat === "neural" ? "greedy" : strat);
       return { ...p, chosen: c };
     });
 
@@ -355,10 +459,29 @@ export default function Take5App() {
     }));
   }
 
+  // Deal fresh hands, carrying match totals forward (first to 66 ends it).
+  function nextDeal() {
+    const s = Math.floor(1 + Math.random() * 1e9);
+    setSeed(s);
+    setState(prev => {
+      const fresh = deal(prev.players.length, s, difficulty);
+      return {
+        ...fresh,
+        dealNumber: prev.dealNumber + 1,
+        totals: prev.players.map(p => prev.totals[p.id] + sumBulls(p.pen)),
+      };
+    });
+  }
+
   // --- Derived ---
   const you = state.players[0];
   const score = (p: PlayerState) => sumBulls(p.pen);
-  const leaderboard = useMemo(() => [...state.players].sort((a, b) => score(a) - score(b)), [state.players]);
+  const matchTotal = (p: PlayerState) => state.totals[p.id] + sumBulls(p.pen);
+  const matchOver = state.phase === "gameOver" && state.players.some(p => matchTotal(p) >= 66);
+  const leaderboard = useMemo(
+    () => [...state.players].sort((a, b) => (state.totals[a.id] + score(a)) - (state.totals[b.id] + score(b))),
+    [state.players, state.totals]
+  );
 
   return (
     <div className="min-h-screen w-full bg-slate-950 text-slate-100 flex flex-col">
@@ -367,12 +490,19 @@ export default function Take5App() {
         seed={seed}
         state={state}
         onOpenSettings={() => setShowSettings(true)}
+        coach={coach}
+        coachThinking={coachThinking}
+        onToggleCoach={() => setCoach(c => !c)}
       />
 
       <div className="flex-1 grid grid-rows-[auto_1fr_auto] gap-3 px-3 pb-3">
         {/* Status line */}
         <div className="mx-auto mt-2 text-sm text-slate-300 flex items-center gap-3">
+          <span className="opacity-80">Deal {state.dealNumber}</span>
+          <span className="opacity-50">•</span>
           <span className="opacity-80">Turn {Math.min(state.turn + 1, 10)} / 10</span>
+          <span className="opacity-50">•</span>
+          <span className="opacity-60">match ends at 66</span>
           <span className="opacity-50">•</span>
           <span className="opacity-80 capitalize">{state.phase.replace(/([a-z])([A-Z])/g, "$1 $2")}</span>
         </div>
@@ -382,14 +512,40 @@ export default function Take5App() {
 
         {/* Controls + Hand */}
         <div className="max-w-6xl w-full mx-auto">
+          {state.phase === "gameOver" && (
+            <div className="mb-3 rounded-2xl bg-slate-900/80 border border-slate-700 p-3 flex items-center justify-between">
+              <div className="text-sm">
+                {matchOver ? (
+                  <>
+                    <span className="font-semibold text-amber-400">Match over!</span>{" "}
+                    {leaderboard[0].name} wins with {matchTotal(leaderboard[0])} bulls
+                    {leaderboard[0].id === 0 ? " — congratulations!" : "."}
+                  </>
+                ) : (
+                  <>Deal {state.dealNumber} finished — you took {score(you)} bulls (total {matchTotal(you)}).</>
+                )}
+              </div>
+              {matchOver ? (
+                <button onClick={() => startNewGame()} className="px-4 py-2 rounded-2xl bg-emerald-600 hover:bg-emerald-500">
+                  New match
+                </button>
+              ) : (
+                <button onClick={nextDeal} className="px-4 py-2 rounded-2xl bg-emerald-600 hover:bg-emerald-500">
+                  Next deal
+                </button>
+              )}
+            </div>
+          )}
           <div className="flex items-center justify-between mb-2">
-            <div className="text-sm text-slate-300">Your score: <b>{score(you)}</b></div>
+            <div className="text-sm text-slate-300">
+              This deal: <b>{score(you)}</b> · Match: <b>{matchTotal(you)}</b> / 66
+            </div>
             <button
               onClick={onPlaySelected}
               className={`px-4 py-2 rounded-2xl shadow-md bg-emerald-600 hover:bg-emerald-500 active:scale-[.98] transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2`}
-              disabled={state.phase !== "choose" || !you.chosen}
+              disabled={state.phase !== "choose" || !you.chosen || botsLoading}
             >
-              <Play className="w-4 h-4" /> Play selected
+              <Play className="w-4 h-4" /> {botsLoading ? "Loading bot…" : "Play selected"}
             </button>
           </div>
 
@@ -398,13 +554,17 @@ export default function Take5App() {
             chosen={you.chosen?.id}
             onChoose={onChooseCard}
             disabled={state.phase !== "choose"}
+            hints={coach ? coachHints : null}
           />
 
           <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-2 text-xs text-slate-400">
             {leaderboard.map(p => (
               <div key={p.id} className="flex items-center justify-between bg-slate-900/60 rounded-xl px-3 py-2">
                 <span>{p.name}</span>
-                <span>{sumBulls(p.pen)}⟁</span>
+                <span>
+                  {sumBulls(p.pen)}⟁
+                  <span className="ml-2 opacity-60">Σ {state.totals[p.id] + sumBulls(p.pen)}</span>
+                </span>
               </div>
             ))}
           </div>
@@ -424,8 +584,14 @@ export default function Take5App() {
           <SettingsDialog
             playersCount={playersCount}
             seed={seed}
+            difficulty={difficulty}
             onClose={() => setShowSettings(false)}
-            onApply={(pc, sd) => { setPlayersCount(pc); startNewGame(pc, sd); setShowSettings(false); }}
+            onApply={(pc, sd, diff) => {
+              setPlayersCount(pc);
+              setDifficulty(diff);
+              startNewGame(pc, sd, diff);
+              setShowSettings(false);
+            }}
           />
         )}
       </AnimatePresence>
@@ -434,8 +600,9 @@ export default function Take5App() {
 }
 
 // ---------- Pieces ----------
-function TopBar({ onNew, seed, state, onOpenSettings }:{
-  onNew:()=>void; seed:number; state:GameState; onOpenSettings:()=>void
+function TopBar({ onNew, seed, state, onOpenSettings, coach, coachThinking, onToggleCoach }:{
+  onNew:()=>void; seed:number; state:GameState; onOpenSettings:()=>void;
+  coach:boolean; coachThinking:boolean; onToggleCoach:()=>void;
 }) {
   const totalCardsOnTable = state.rows.reduce((a, r) => a + r.length, 0);
   return (
@@ -445,6 +612,13 @@ function TopBar({ onNew, seed, state, onOpenSettings }:{
         <div className="text-xs text-slate-400">seed {seed}</div>
         <div className="text-xs text-slate-400">table {totalCardsOnTable} cards</div>
         <div className="flex-1" />
+        <button
+          onClick={onToggleCoach}
+          title="Coach: the trained bot scores your options"
+          className={`flex items-center gap-2 text-sm px-3 py-1.5 rounded-xl ${coach ? "bg-amber-600 hover:bg-amber-500" : "bg-slate-800 hover:bg-slate-700"}`}
+        >
+          <Lightbulb className="w-4 h-4"/> {coachThinking ? "Thinking…" : "Coach"}
+        </button>
         <button onClick={onNew} className="flex items-center gap-2 text-sm px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700">
           <RefreshCw className="w-4 h-4"/> New game
         </button>
@@ -481,20 +655,38 @@ function Table({ rows }:{ rows:[Row, Row, Row, Row] }) {
   );
 }
 
-function Hand({ cards, chosen, onChoose, disabled }:{
-  cards:Card[]; chosen?:number; onChoose:(c:Card)=>void; disabled?:boolean
+function Hand({ cards, chosen, onChoose, disabled, hints }:{
+  cards:Card[]; chosen?:number; onChoose:(c:Card)=>void; disabled?:boolean;
+  hints?:Map<number, number> | null;
 }){
+  // Coach badges show each card's expected cost in bulls relative to the
+  // best option (0 = the bot's pick).
+  const best = hints && hints.size ? Math.max(...hints.values()) : null;
   return (
     <div className="bg-slate-900/60 rounded-2xl p-2 shadow-inner">
-      <div className="text-xs text-slate-400 mb-1">Your hand ({cards.length})</div>
-      <div className="flex gap-2 overflow-x-auto">
-        {cards.map(c => (
-          <button key={c.id} onClick={() => !disabled && onChoose(c)} disabled={disabled}
-            className={`relative ${chosen===c.id?"ring-2 ring-emerald-500":"ring-0"} rounded-xl`}>
-            <CardView card={c} small />
-            {chosen===c.id && (<div className="absolute -top-1 -right-1 bg-emerald-600 text-[10px] px-1.5 py-0.5 rounded-full">Selected</div>)}
-          </button>
-        ))}
+      <div className="text-xs text-slate-400 mb-1">
+        Your hand ({cards.length}){hints && best !== null && (
+          <span className="ml-2 text-amber-400">coach: ★ best, −n bulls vs best</span>
+        )}
+      </div>
+      <div className="flex gap-2 overflow-x-auto pt-2">
+        {cards.map(c => {
+          const score = hints?.get(c.id);
+          const delta = best !== null && score !== undefined ? score - best : null;
+          const isBest = delta !== null && delta > -1e-6;
+          return (
+            <button key={c.id} onClick={() => !disabled && onChoose(c)} disabled={disabled}
+              className={`relative ${chosen===c.id?"ring-2 ring-emerald-500":isBest?"ring-2 ring-amber-500":"ring-0"} rounded-xl`}>
+              <CardView card={c} small />
+              {chosen===c.id && (<div className="absolute -top-1 -right-1 bg-emerald-600 text-[10px] px-1.5 py-0.5 rounded-full z-10">Selected</div>)}
+              {delta !== null && (
+                <div className={`absolute -top-2 left-1/2 -translate-x-1/2 text-[10px] px-1.5 py-0.5 rounded-full ${isBest ? "bg-amber-500 text-slate-950" : "bg-slate-700 text-slate-200"}`}>
+                  {isBest ? "★" : delta.toFixed(1)}
+                </div>
+              )}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -666,15 +858,17 @@ function RowChoice({ rows, onPick }:{ rows:[Row,Row,Row,Row]; onPick:(idx:number
 }
 
 function SettingsDialog({
-  playersCount, seed, onClose, onApply
+  playersCount, seed, difficulty, onClose, onApply
 }:{
   playersCount:number;
   seed:number;
+  difficulty:BotStrategyId;
   onClose:()=>void;
-  onApply:(players:number, seed:number)=>void;
+  onApply:(players:number, seed:number, difficulty:BotStrategyId)=>void;
 }){
   const [localPlayers, setLocalPlayers] = useState(playersCount);
   const [localSeed, setLocalSeed] = useState(seed);
+  const [localDifficulty, setLocalDifficulty] = useState<BotStrategyId>(difficulty);
   return (
     <motion.div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-30 flex items-end md:items-center justify-center"
       initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}}>
@@ -701,6 +895,26 @@ function SettingsDialog({
             </div>
           </label>
 
+          <div className="block text-sm">
+            <div className="text-slate-300 mb-1">Bot difficulty</div>
+            <div className="grid grid-cols-2 gap-2">
+              {DIFFICULTIES.map(d => (
+                <button
+                  key={d.id}
+                  onClick={() => setLocalDifficulty(d.id)}
+                  className={`text-left rounded-xl px-3 py-2 border ${
+                    localDifficulty === d.id
+                      ? "border-emerald-500 bg-emerald-600/20"
+                      : "border-slate-700 bg-slate-800 hover:bg-slate-700"
+                  }`}
+                >
+                  <div className="text-slate-100">{d.label}</div>
+                  <div className="text-xs text-slate-400">{d.blurb}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
           <label className="block text-sm">
             <div className="text-slate-300 mb-1">Seed</div>
             <input
@@ -720,7 +934,7 @@ function SettingsDialog({
             Randomize seed
           </button>
           <button
-            onClick={()=> onApply(localPlayers, localSeed)}
+            onClick={()=> onApply(localPlayers, localSeed, localDifficulty)}
             className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white"
           >
             Start new game

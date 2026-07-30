@@ -60,6 +60,30 @@ of card id. The schema supports 2-10 players from day one.
 Heuristic-only games run at ~1.1M games/s on a desktop CPU; `mc:64` plays
 ~700 full games/s including its internal search.
 
+## Performance (browser WASM, and why not WebGPU)
+
+Measured on the release WASM build (Node 22 runtime, f16 `net.t5n`,
+`neural:16`, i.e. 16 belief-sampled worlds — the browser's setting), 20
+timed `choose_card` calls per scenario:
+
+| scenario | per-move latency (mean, tight spread) |
+| --- | --- |
+| mid-game, 5-card hand (turn 5) | ~63 ms |
+| worst case: 10-card hand (turn 0) | ~103 ms |
+
+Enabling WASM SIMD (`RUSTFLAGS='-C target-feature=+simd128'`) was measured
+and made no difference (62.6 vs 62.5 ms mean), so it is not part of the
+build. The net is a 512-wide 2-block MLP (~1.4 MFLOPs/forward; a move runs
+a few hundred forwards), which scalar WASM already handles in ~100 ms worst
+case.
+
+**Verdict: WebGPU is unnecessary at this model size.** GPU dispatch
+overhead and weight upload would likely cost more than they save for
+1.4 MFLOP forwards, and the latency is already well under perceptible
+"thinking time" for a card game. If UI smoothness ever matters (the search
+currently runs on the main thread and can block a frame for ~100 ms), the
+right next step is moving the bot into a Web Worker — not GPU inference.
+
 ## Milestones
 
 - [x] M1: Rust engine, parity with legacy implementation, Python bindings
@@ -73,7 +97,23 @@ Heuristic-only games run at ~1.1M games/s on a desktop CPU; `mc:64` plays
       + belief head: auxiliary cross-entropy predicting, per unseen card,
       which opponent holds it or whether it is in the stock. Targets come
       from `VecGames.belief_targets()` (training-only hidden-state read).
-- [ ] M5: Belief-guided search; WASM build; browser integration
+- [x] M5a: Belief-guided determinized search at inference. Pure-Rust
+      inference of the trained net (`take5-core/src/neural.rs`, exported by
+      `training/export_net.py`, torch-parity-tested); `NeuralSearchBot` does
+      one-ply expectimax over belief-sampled worlds with value bootstrap.
+      Arena spec: `neural:<weights>[:worlds]` (`:0` = raw policy).
+      **Result: beats 3x mc:64** (11.2 vs 12.2-12.9 mean penalty, 29.3% win
+      over 1500 games); mixed field: neural:32 9.5 > mc:64 10.6 >
+      neural:0 12.6 > greedy 16.4.
+- [x] M5b: WASM build (`engine/take5-wasm`, built by
+      `scripts/build_wasm.sh` into `web/src/engine/pkg`) and browser
+      integration: the web UI's bot difficulty setting now offers Random /
+      Greedy (TS heuristics) and Search (mc:64) / Neural (trained net +
+      belief search, weights fetched from `public/net.t5n`) running the
+      real engine in WASM. Verified in a Node runtime smoke test. Coach
+      mode (toolbar lightbulb) scores the human's hand with the neural
+      search bot (`NeuralSearchBot::analyze`) and badges each card with its
+      expected bull cost relative to the bot's pick.
 
 ### Training notes (M3)
 

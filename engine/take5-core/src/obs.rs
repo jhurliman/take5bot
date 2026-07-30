@@ -19,8 +19,8 @@
 //! Total: 264. Bullhead values are intentionally not encoded: they are a
 //! deterministic function of card id, learned trivially by an embedding.
 
-use crate::cards::{set_contains, set_len, NUM_CARDS};
-use crate::game::{Game, Phase, MAX_PLAYERS, MAX_ROW_LEN, ROWS};
+use crate::cards::{set_contains, set_len, Card, NUM_CARDS};
+use crate::game::{Game, Phase, View, MAX_PLAYERS, MAX_ROW_LEN, ROWS};
 use crate::{bullheads, HAND_SIZE};
 
 pub const OBS_LEN: usize = 264;
@@ -33,10 +33,20 @@ const SCALAR_OFF: usize = SEAT_MASK_OFF + MAX_PLAYERS;
 
 /// Encode `player`'s observation of `game` into `out` (length `OBS_LEN`).
 pub fn encode_observation(game: &Game, player: usize, out: &mut [f32]) {
+    let forced = match game.phase() {
+        Phase::ChooseRow { player: p, card } if p as usize == player => Some(card),
+        _ => None,
+    };
+    encode_view(&game.view(player), forced, out);
+}
+
+/// Encode an observation directly from a seat's `View`. `forced` is the
+/// card awaiting this seat's row choice, if any. This is the entry point
+/// bots use — they never hold a full `Game`.
+pub fn encode_view(view: &View, forced: Option<Card>, out: &mut [f32]) {
     assert_eq!(out.len(), OBS_LEN);
     out.fill(0.0);
-
-    let view = game.view(player);
+    let player = view.player as usize;
     for c in 1..=NUM_CARDS as u8 {
         if set_contains(view.hand, c) {
             out[c as usize - 1] = 1.0;
@@ -67,11 +77,9 @@ pub fn encode_observation(game: &Game, player: usize, out: &mut [f32]) {
 
     out[SCALAR_OFF] = view.turn as f32 / HAND_SIZE as f32;
     out[SCALAR_OFF + 1] = set_len(view.hand) as f32 / HAND_SIZE as f32;
-    if let Phase::ChooseRow { player: p, card } = game.phase() {
-        if p as usize == player {
-            out[SCALAR_OFF + 2] = 1.0;
-            out[SCALAR_OFF + 3] = card as f32 / NUM_CARDS as f32;
-        }
+    if let Some(card) = forced {
+        out[SCALAR_OFF + 2] = 1.0;
+        out[SCALAR_OFF + 3] = card as f32 / NUM_CARDS as f32;
     }
 }
 

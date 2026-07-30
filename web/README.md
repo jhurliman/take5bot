@@ -1,69 +1,46 @@
-# React + TypeScript + Vite
+# take5bot web UI
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Play [Take 5 (6 nimmt!)](https://en.wikipedia.org/wiki/6_nimmt!) in the
+browser against bots, from random-card baselines up to a trained neural
+net with belief-guided search.
 
-Currently, two official plugins are available:
+**Live: https://jhurliman.github.io/take5bot/**
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+A Vite + React + TypeScript app. Game state and the two easy difficulties
+(Random, Greedy) are pure TypeScript; the two strong difficulties run the
+real Rust engine compiled to WebAssembly:
 
-## Expanding the ESLint configuration
+- **Search** — determinized Monte Carlo rollouts (`mc:64`)
+- **Neural** — trained policy/value/belief net + one-ply expectimax over
+  belief-sampled worlds (`neural:16`), plus a coach mode that scores the
+  human's hand
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## Dev
 
-```js
-export default tseslint.config([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      ...tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      ...tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      ...tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```sh
+cd web
+npm ci
+npm run dev     # local dev server
+npm run lint
+npm run build   # tsc + vite build into dist/
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## The WASM engine and weights
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+`src/engine/pkg/` is the wasm-pack output of `engine/take5-wasm`
+(bindings over `engine/take5-core`). It is committed to git so web
+development and CI need no Rust toolchain; rebuild it after engine changes
+with `scripts/build_wasm.sh` from the repo root.
 
-export default tseslint.config([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+The Neural bot's weights live in `public/net.t5n` (~2.9 MB, f16 T5N2
+format, exported by `training/export_net.py`) and are fetched lazily via
+`import.meta.env.BASE_URL` the first time a neural bot is needed. A neural
+move takes ~60–100 ms on the main thread — see the Performance section in
+`docs/ARCHITECTURE.md`.
+
+## Deployment
+
+Merges to `main` that touch `web/` auto-deploy to GitHub Pages via
+`.github/workflows/deploy-pages.yml` (build `web/dist`, publish with
+`actions/deploy-pages`). `base: "/take5bot/"` in `vite.config.ts` matches
+the project-pages URL and is also used by the dev server.
