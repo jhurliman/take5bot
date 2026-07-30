@@ -41,6 +41,7 @@ jobs:
         run: npm run build
 
       - name: Web engine sanity check (pkg + weights in sync)
+        working-directory: .
         run: node scripts/check_web_engine.mjs
 
       - name: Upload artifact
