@@ -40,6 +40,9 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Web engine sanity check (pkg + weights in sync)
+        run: node scripts/check_web_engine.mjs
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
