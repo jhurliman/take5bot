@@ -42,6 +42,8 @@ interface PlayerState {
 
 interface GameState {
   seed: number;
+  dealNumber: number; // 1-based; a match is deals until someone reaches 66
+  totals: number[]; // bulls carried from previous deals, by player id
   turn: number; // 0..9 (10 turns)
   players: PlayerState[];
   rows: [Row, Row, Row, Row];
@@ -230,6 +232,8 @@ function deal(players: number, seed: number, difficulty: BotStrategyId): GameSta
 
   return {
     seed,
+    dealNumber: 1,
+    totals: Array(N).fill(0),
     turn: 0,
     players: playersState,
     rows: rowStarters as [Row, Row, Row, Row],
@@ -455,10 +459,29 @@ export default function Take5App() {
     }));
   }
 
+  // Deal fresh hands, carrying match totals forward (first to 66 ends it).
+  function nextDeal() {
+    const s = Math.floor(1 + Math.random() * 1e9);
+    setSeed(s);
+    setState(prev => {
+      const fresh = deal(prev.players.length, s, difficulty);
+      return {
+        ...fresh,
+        dealNumber: prev.dealNumber + 1,
+        totals: prev.players.map(p => prev.totals[p.id] + sumBulls(p.pen)),
+      };
+    });
+  }
+
   // --- Derived ---
   const you = state.players[0];
   const score = (p: PlayerState) => sumBulls(p.pen);
-  const leaderboard = useMemo(() => [...state.players].sort((a, b) => score(a) - score(b)), [state.players]);
+  const matchTotal = (p: PlayerState) => state.totals[p.id] + sumBulls(p.pen);
+  const matchOver = state.phase === "gameOver" && state.players.some(p => matchTotal(p) >= 66);
+  const leaderboard = useMemo(
+    () => [...state.players].sort((a, b) => (state.totals[a.id] + score(a)) - (state.totals[b.id] + score(b))),
+    [state.players, state.totals]
+  );
 
   return (
     <div className="min-h-screen w-full bg-slate-950 text-slate-100 flex flex-col">
@@ -475,7 +498,11 @@ export default function Take5App() {
       <div className="flex-1 grid grid-rows-[auto_1fr_auto] gap-3 px-3 pb-3">
         {/* Status line */}
         <div className="mx-auto mt-2 text-sm text-slate-300 flex items-center gap-3">
+          <span className="opacity-80">Deal {state.dealNumber}</span>
+          <span className="opacity-50">•</span>
           <span className="opacity-80">Turn {Math.min(state.turn + 1, 10)} / 10</span>
+          <span className="opacity-50">•</span>
+          <span className="opacity-60">match ends at 66</span>
           <span className="opacity-50">•</span>
           <span className="opacity-80 capitalize">{state.phase.replace(/([a-z])([A-Z])/g, "$1 $2")}</span>
         </div>
@@ -485,8 +512,34 @@ export default function Take5App() {
 
         {/* Controls + Hand */}
         <div className="max-w-6xl w-full mx-auto">
+          {state.phase === "gameOver" && (
+            <div className="mb-3 rounded-2xl bg-slate-900/80 border border-slate-700 p-3 flex items-center justify-between">
+              <div className="text-sm">
+                {matchOver ? (
+                  <>
+                    <span className="font-semibold text-amber-400">Match over!</span>{" "}
+                    {leaderboard[0].name} wins with {matchTotal(leaderboard[0])} bulls
+                    {leaderboard[0].id === 0 ? " — congratulations!" : "."}
+                  </>
+                ) : (
+                  <>Deal {state.dealNumber} finished — you took {score(you)} bulls (total {matchTotal(you)}).</>
+                )}
+              </div>
+              {matchOver ? (
+                <button onClick={() => startNewGame()} className="px-4 py-2 rounded-2xl bg-emerald-600 hover:bg-emerald-500">
+                  New match
+                </button>
+              ) : (
+                <button onClick={nextDeal} className="px-4 py-2 rounded-2xl bg-emerald-600 hover:bg-emerald-500">
+                  Next deal
+                </button>
+              )}
+            </div>
+          )}
           <div className="flex items-center justify-between mb-2">
-            <div className="text-sm text-slate-300">Your score: <b>{score(you)}</b></div>
+            <div className="text-sm text-slate-300">
+              This deal: <b>{score(you)}</b> · Match: <b>{matchTotal(you)}</b> / 66
+            </div>
             <button
               onClick={onPlaySelected}
               className={`px-4 py-2 rounded-2xl shadow-md bg-emerald-600 hover:bg-emerald-500 active:scale-[.98] transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2`}
@@ -508,7 +561,10 @@ export default function Take5App() {
             {leaderboard.map(p => (
               <div key={p.id} className="flex items-center justify-between bg-slate-900/60 rounded-xl px-3 py-2">
                 <span>{p.name}</span>
-                <span>{sumBulls(p.pen)}⟁</span>
+                <span>
+                  {sumBulls(p.pen)}⟁
+                  <span className="ml-2 opacity-60">Σ {state.totals[p.id] + sumBulls(p.pen)}</span>
+                </span>
               </div>
             ))}
           </div>
