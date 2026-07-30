@@ -86,6 +86,34 @@ def test_bot_seats() -> None:
     assert (pens.sum(axis=1) > 0).all(), "someone always collects bulls"
 
 
+def test_belief_targets() -> None:
+    games, seats = 6, 4
+    env = take5_engine.VecGames(games, [None] * seats, seed=11)
+    rng = np.random.default_rng(5)
+    for _ in range(3):  # advance a few turns so `played` is non-trivial
+        _, mask = env.observe()
+        env.step(random_legal(mask.reshape(games * seats, CARDS), rng))
+
+    bt = env.belief_targets().reshape(games, seats, CARDS)
+    hands = env.debug_hands()
+    played = env.debug_played()
+    for g in range(games):
+        pub = set(played[g])
+        for j in range(seats):
+            holder = {}
+            for d in range(1, seats):
+                for c in hands[g][(j + d) % seats]:
+                    holder[c] = d - 1
+            for c in range(1, CARDS + 1):
+                got = bt[g, j, c - 1]
+                if c in hands[g][j] or c in pub:
+                    assert got == -100, (g, j, c, got)
+                elif c in holder:
+                    assert got == holder[c], (g, j, c, got)
+                else:
+                    assert got == seats - 1, (g, j, c, got)
+
+
 def test_rejects_illegal() -> None:
     env = take5_engine.VecGames(2, [None] * 4, seed=0)
     try:
@@ -99,6 +127,7 @@ def main() -> int:
     test_self_play()
     test_determinism()
     test_bot_seats()
+    test_belief_targets()
     test_rejects_illegal()
     print("VEC GAMES OK")
     return 0

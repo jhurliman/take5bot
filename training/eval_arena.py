@@ -34,7 +34,7 @@ def main() -> int:
     ckpt = torch.load(args.ckpt, map_location=device, weights_only=True)
     cfg = ckpt.get("config", {})
     net = PolicyNet(cfg.get("width", 512), cfg.get("blocks", 2)).to(device)
-    net.load_state_dict(ckpt["model"])
+    net.load_state_dict(ckpt["model"], strict=False)
 
     opponents = args.opponents.split(",")
     result = eval_vs(net, opponents, args.games, args.seed, device)

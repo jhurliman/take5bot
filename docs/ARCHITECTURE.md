@@ -69,7 +69,10 @@ Heuristic-only games run at ~1.1M games/s on a desktop CPU; `mc:64` plays
       `training/eval_arena.py` evaluates checkpoints). The raw policy beats
       greedy (11.6 vs 13.2 mean penalty over 5k games) and matches mc:16;
       mc:64 still wins — that gap is M4/M5's job (league + search).
-- [ ] M4: League training + belief head (opponent hand prediction)
+- [x] M4: League training (frozen past-self snapshots in the rollout pool)
+      + belief head: auxiliary cross-entropy predicting, per unseen card,
+      which opponent holds it or whether it is in the stock. Targets come
+      from `VecGames.belief_targets()` (training-only hidden-state read).
 - [ ] M5: Belief-guided search; WASM build; browser integration
 
 ### Training notes (M3)
@@ -81,4 +84,8 @@ time — they sum to the final relative score and are zero-sum across seats.
 Policy-seat forced row choices use the cheapest-row heuristic in v1 (a
 row-choice head is M4 work). Pure mirror self-play plateaued without
 transferring to other styles, so training mixes pools: half pure self-play,
-half with greedy/random/mc:8 bot seats.
+half with greedy/random/mc:8 bot seats. M4 adds league envs (frozen
+past-self snapshots) and the belief head; its best checkpoint reaches
+11.0 vs greedy's 13.4 (5k games, 27.9% win), parity with mc:16, and
+still trails mc:64 (13.4 vs 11.8) — closing that gap is M5's
+belief-guided search at inference.
