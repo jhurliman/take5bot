@@ -198,24 +198,18 @@ impl VecGames {
     )> {
         let k = self.policy_seats.len();
         let n = self.num_players;
-        let acts = actions.as_slice()?;
-        if acts.len() != self.games.len() * k {
+        let num_games = self.games.len();
+        let acts: Vec<i64> = actions.as_slice()?.to_vec();
+        if acts.len() != num_games * k {
             return Err(PyValueError::new_err(format!(
                 "expected {} actions, got {}",
-                self.games.len() * k,
+                num_games * k,
                 acts.len()
             )));
         }
 
-        let mut rewards = vec![0.0f32; self.games.len() * k];
-        let mut dones = vec![0u8; self.games.len()];
-        let mut finals = vec![0.0f32; self.games.len() * n];
-
-        for g in 0..self.games.len() {
-            let game = &mut self.games[g];
-            let pen_before: Vec<u16> = game.penalties().to_vec();
-
-            let mut cards: Vec<Card> = vec![0; n];
+        // Validate every action before mutating anything.
+        for (g, game) in self.games.iter().enumerate() {
             for (j, &seat) in self.policy_seats.iter().enumerate() {
                 let a = acts[g * k + j];
                 if !(1..=NUM_CARDS as i64).contains(&a) || !set_contains(game.hand(seat), a as Card)
@@ -224,33 +218,110 @@ impl VecGames {
                         "game {g} seat {seat}: card {a} is not playable"
                     )));
                 }
-                cards[seat] = a as Card;
             }
-            for (seat, bot) in self.bots[g].iter_mut().enumerate() {
-                if let Some(bot) = bot {
-                    cards[seat] = bot.choose_card(&game.view(seat), &mut self.rngs[g]);
-                }
-            }
+        }
 
-            game.play_cards(&cards).expect("all cards validated");
-            Self::settle(game, &mut self.bots[g], &mut self.rngs[g]);
+        // Deterministic reset seeds drawn up front (one per game per step)
+        // so the parallel section never touches the shared stream.
+        let reset_seeds: Vec<u64> = (0..num_games)
+            .map(|_| self.seed_stream.next_u64())
+            .collect();
 
-            let deltas: Vec<f32> = (0..n)
-                .map(|p| (game.penalties()[p] - pen_before[p]) as f32)
+        struct Work<'a> {
+            game: &'a mut Game,
+            bots: &'a mut SeatBots,
+            rng: &'a mut SplitMix64,
+            acts: &'a [i64],
+            reset_seed: u64,
+            rewards: &'a mut [f32],
+            done: &'a mut u8,
+            finals: &'a mut [f32],
+        }
+
+        let policy_seats = &self.policy_seats;
+        let mut rewards = vec![0.0f32; num_games * k];
+        let mut dones = vec![0u8; num_games];
+        let mut finals = vec![0.0f32; num_games * n];
+
+        {
+            let mut items: Vec<Work> = self
+                .games
+                .iter_mut()
+                .zip(self.bots.iter_mut())
+                .zip(self.rngs.iter_mut())
+                .zip(acts.chunks(k))
+                .zip(reset_seeds.iter())
+                .zip(rewards.chunks_mut(k))
+                .zip(dones.iter_mut())
+                .zip(finals.chunks_mut(n))
+                .map(
+                    |(((((((game, bots), rng), acts), seed), rewards), done), finals)| Work {
+                        game,
+                        bots,
+                        rng,
+                        acts,
+                        reset_seed: *seed,
+                        rewards,
+                        done,
+                        finals,
+                    },
+                )
                 .collect();
-            let total: f32 = deltas.iter().sum();
-            for (j, &seat) in self.policy_seats.iter().enumerate() {
-                let others = (total - deltas[seat]) / (n - 1) as f32;
-                rewards[g * k + j] = others - deltas[seat];
-            }
 
-            if game.is_terminal() {
-                dones[g] = 1;
-                for p in 0..n {
-                    finals[g * n + p] = game.penalties()[p] as f32;
+            let run_one = move |w: &mut Work| {
+                let mut cards: Vec<Card> = vec![0; n];
+                for (j, &seat) in policy_seats.iter().enumerate() {
+                    cards[seat] = w.acts[j] as Card;
                 }
-                self.games[g] = Game::deal(n, self.seed_stream.next_u64()).expect("valid count");
-            }
+                for (seat, bot) in w.bots.iter_mut().enumerate() {
+                    if let Some(bot) = bot {
+                        cards[seat] = bot.choose_card(&w.game.view(seat), w.rng);
+                    }
+                }
+                let pen_before: Vec<u16> = w.game.penalties().to_vec();
+                w.game.play_cards(&cards).expect("all cards validated");
+                Self::settle(w.game, w.bots, w.rng);
+
+                let deltas: Vec<f32> = (0..n)
+                    .map(|p| (w.game.penalties()[p] - pen_before[p]) as f32)
+                    .collect();
+                let total: f32 = deltas.iter().sum();
+                for (j, &seat) in policy_seats.iter().enumerate() {
+                    let others = (total - deltas[seat]) / (n - 1) as f32;
+                    w.rewards[j] = others - deltas[seat];
+                }
+
+                if w.game.is_terminal() {
+                    *w.done = 1;
+                    for p in 0..n {
+                        w.finals[p] = w.game.penalties()[p] as f32;
+                    }
+                    *w.game = Game::deal(n, w.reset_seed).expect("valid count");
+                }
+            };
+
+            py.allow_threads(|| {
+                let threads = std::thread::available_parallelism()
+                    .map(|t| t.get())
+                    .unwrap_or(1)
+                    .min(items.len());
+                if threads <= 1 {
+                    for w in items.iter_mut() {
+                        run_one(w);
+                    }
+                } else {
+                    let chunk_size = items.len().div_ceil(threads);
+                    std::thread::scope(|scope| {
+                        for chunk in items.chunks_mut(chunk_size) {
+                            scope.spawn(|| {
+                                for w in chunk.iter_mut() {
+                                    run_one(w);
+                                }
+                            });
+                        }
+                    });
+                }
+            });
         }
 
         Ok((

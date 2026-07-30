@@ -247,6 +247,19 @@ def main() -> int:
         "--init-from", default=None, help="warm-start weights (non-strict load)"
     )
     parser.add_argument(
+        "--opponent-net",
+        default=None,
+        help="exported .t5n weights: adds pool slots where seats are driven "
+        "by this frozen champion (the search-league anchor)",
+    )
+    parser.add_argument(
+        "--opponent-worlds",
+        type=int,
+        default=0,
+        help="search worlds for champion opponents (0 = raw policy, cheap; "
+        ">0 adds real search pressure but costs rollout time)",
+    )
+    parser.add_argument(
         "--device", default="cuda" if torch.cuda.is_available() else "cpu"
     )
     parser.add_argument("--wandb", action="store_true")
@@ -269,6 +282,12 @@ def main() -> int:
         EnvSlot(n, [None] * 4, [0, 0, 1, 1], args.seed + 5, device),
         EnvSlot(n, [None] * 4, [0, 2, 2, 2], args.seed + 6, device),
     ]
+    if args.opponent_net:
+        champ = f"neural:{args.opponent_net}:{args.opponent_worlds}"
+        pool.append(EnvSlot(n, [None, champ, champ, champ], [0], args.seed + 7, device))
+        pool.append(
+            EnvSlot(n, [None, None, champ, "greedy"], [0, 0], args.seed + 8, device)
+        )
 
     learner = PolicyNet(args.width, args.blocks).to(device)
     frozen = [
