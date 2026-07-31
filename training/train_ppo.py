@@ -272,7 +272,7 @@ def eval_match(
             opp_total += float(totals[1:].mean())
     net.train()
     return {
-        "match_win": won / matches,
+        "match_win": float(won / matches),
         "policy_total": pol_total / matches,
         "opp_total": opp_total / matches,
     }
