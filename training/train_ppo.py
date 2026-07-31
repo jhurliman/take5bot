@@ -123,6 +123,52 @@ def eval_vs(
     }
 
 
+@torch.no_grad()
+def eval_match(
+    net: PolicyNet,
+    opponents: list[str],
+    matches: int,
+    seed: int,
+    device: torch.device,
+    match_to: int = 66,
+) -> dict[str, float]:
+    """Play full matches to `match_to` (policy argmax in seat 0). Returns
+    the policy's match win rate (ties split) and mean final totals."""
+    net.eval()
+    env = take5_engine.VecGames(matches, [None] + opponents, seed, match_to)
+    n = env.num_players()
+    won = 0.0
+    finished = np.zeros(matches, dtype=bool)
+    pol_total = 0.0
+    opp_total = 0.0
+    while not finished.all():
+        obs, mask = env.observe()
+        obs_t = torch.as_tensor(obs, device=device).view(-1, OBS_LEN)
+        mask_t = torch.as_tensor(mask, device=device).view(-1, NUM_CARDS)
+        logits, _, _ = net(obs_t)
+        acts = (
+            logits.masked_fill(mask_t < 0.5, float("-inf")).argmax(dim=-1).cpu().numpy()
+        )
+        _, _, _, match_dones, match_finals = env.step((acts + 1).astype(np.int64))
+        for g in np.flatnonzero(match_dones):
+            if finished[g]:
+                continue
+            finished[g] = True
+            totals = match_finals[g * n : (g + 1) * n]
+            best = totals.min()
+            winners = (totals == best).sum()
+            if totals[0] == best:
+                won += 1.0 / winners
+            pol_total += float(totals[0])
+            opp_total += float(totals[1:].mean())
+    net.train()
+    return {
+        "match_win": won / matches,
+        "policy_total": pol_total / matches,
+        "opp_total": opp_total / matches,
+    }
+
+
 class EnvSlot:
     """One rollout env plus who drives each policy seat.
 
