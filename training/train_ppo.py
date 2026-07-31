@@ -109,7 +109,7 @@ def eval_vs(
         acts = (
             logits.masked_fill(mask_t < 0.5, float("-inf")).argmax(dim=-1).cpu().numpy()
         )
-        _, dones, finals = env.step((acts + 1).astype(np.int64))
+        _, dones, finals, _, _ = env.step((acts + 1).astype(np.int64))
     assert dones.all(), "deals must finish in exactly TURNS steps"
     pens = finals.reshape(games, n)
     best = pens.min(axis=1, keepdims=True)
@@ -120,6 +120,52 @@ def eval_vs(
         "policy_pen": float(pens[:, 0].mean()),
         "opp_pen": float(pens[:, 1:].mean()),
         "win_rate": float(wins / games),
+    }
+
+
+@torch.no_grad()
+def eval_match(
+    net: PolicyNet,
+    opponents: list[str],
+    matches: int,
+    seed: int,
+    device: torch.device,
+    match_to: int = 66,
+) -> dict[str, float]:
+    """Play full matches to `match_to` (policy argmax in seat 0). Returns
+    the policy's match win rate (ties split) and mean final totals."""
+    net.eval()
+    env = take5_engine.VecGames(matches, [None] + opponents, seed, match_to)
+    n = env.num_players()
+    won = 0.0
+    finished = np.zeros(matches, dtype=bool)
+    pol_total = 0.0
+    opp_total = 0.0
+    while not finished.all():
+        obs, mask = env.observe()
+        obs_t = torch.as_tensor(obs, device=device).view(-1, OBS_LEN)
+        mask_t = torch.as_tensor(mask, device=device).view(-1, NUM_CARDS)
+        logits, _, _ = net(obs_t)
+        acts = (
+            logits.masked_fill(mask_t < 0.5, float("-inf")).argmax(dim=-1).cpu().numpy()
+        )
+        _, _, _, match_dones, match_finals = env.step((acts + 1).astype(np.int64))
+        for g in np.flatnonzero(match_dones):
+            if finished[g]:
+                continue
+            finished[g] = True
+            totals = match_finals[g * n : (g + 1) * n]
+            best = totals.min()
+            winners = (totals == best).sum()
+            if totals[0] == best:
+                won += 1.0 / winners
+            pol_total += float(totals[0])
+            opp_total += float(totals[1:].mean())
+    net.train()
+    return {
+        "match_win": won / matches,
+        "policy_total": pol_total / matches,
+        "opp_total": opp_total / matches,
     }
 
 
@@ -137,8 +183,9 @@ class EnvSlot:
         driver_slots: list[int],
         seed: int,
         device: torch.device,
+        match_to: int = 0,
     ):
-        self.env = take5_engine.VecGames(num_games, specs, seed)
+        self.env = take5_engine.VecGames(num_games, specs, seed, match_to)
         self.num_games = num_games
         self.driver_slots = driver_slots
         k = len(driver_slots)
@@ -201,7 +248,9 @@ def collect(
                 buf["val"][t] = value
                 buf["belief"][t] = belief_t[rid]
 
-        rewards, dones, _ = slot.env.step((actions.cpu().numpy() + 1).astype(np.int64))
+        rewards, dones, _, _, _ = slot.env.step(
+            (actions.cpu().numpy() + 1).astype(np.int64)
+        )
         buf["rew"][t] = torch.as_tensor(rewards, device=device)[slot.train_rows]
     assert dones.all(), "deals must finish in exactly TURNS steps"
     return buf
@@ -253,6 +302,18 @@ def main() -> int:
         "by this frozen champion (the search-league anchor)",
     )
     parser.add_argument(
+        "--match-to",
+        type=int,
+        default=0,
+        help="train in match mode: deals accumulate to this bull total "
+        "(66 = real rules), with a zero-sum win bonus at match end",
+    )
+    parser.add_argument(
+        "--exploit",
+        action="store_true",
+        help="train a pure best-response to --opponent-net (exploitability probe)",
+    )
+    parser.add_argument(
         "--opponent-worlds",
         type=int,
         default=0,
@@ -275,19 +336,79 @@ def main() -> int:
     # against frozen snapshots (driver slots 1 and 2).
     n = max(args.games // 6, 1)
     pool = [
-        EnvSlot(n, [None] * 4, [0, 0, 0, 0], args.seed + 1, device),
-        EnvSlot(n, [None] * 4, [0, 0, 0, 0], args.seed + 2, device),
-        EnvSlot(n, [None, "greedy", "greedy", "greedy"], [0], args.seed + 3, device),
-        EnvSlot(n, [None, "greedy", "random", "mc:8"], [0], args.seed + 4, device),
-        EnvSlot(n, [None] * 4, [0, 0, 1, 1], args.seed + 5, device),
-        EnvSlot(n, [None] * 4, [0, 2, 2, 2], args.seed + 6, device),
+        EnvSlot(n, [None] * 4, [0, 0, 0, 0], args.seed + 1, device, args.match_to),
+        EnvSlot(n, [None] * 4, [0, 0, 0, 0], args.seed + 2, device, args.match_to),
+        EnvSlot(
+            n,
+            [None, "greedy", "greedy", "greedy"],
+            [0],
+            args.seed + 3,
+            device,
+            args.match_to,
+        ),
+        EnvSlot(
+            n,
+            [None, "greedy", "random", "mc:8"],
+            [0],
+            args.seed + 4,
+            device,
+            args.match_to,
+        ),
+        EnvSlot(n, [None] * 4, [0, 0, 1, 1], args.seed + 5, device, args.match_to),
+        EnvSlot(n, [None] * 4, [0, 2, 2, 2], args.seed + 6, device, args.match_to),
     ]
     if args.opponent_net:
         champ = f"neural:{args.opponent_net}:{args.opponent_worlds}"
-        pool.append(EnvSlot(n, [None, champ, champ, champ], [0], args.seed + 7, device))
-        pool.append(
-            EnvSlot(n, [None, None, champ, "greedy"], [0, 0], args.seed + 8, device)
-        )
+        if args.exploit:
+            # Best-response mode: every opponent is the frozen champion.
+            # The learner's win rate above parity measures exploitability.
+            pool = [
+                EnvSlot(
+                    n,
+                    [None, champ, champ, champ],
+                    [0],
+                    args.seed + 7,
+                    device,
+                    args.match_to,
+                ),
+                EnvSlot(
+                    n,
+                    [None, champ, champ, champ],
+                    [0],
+                    args.seed + 8,
+                    device,
+                    args.match_to,
+                ),
+                EnvSlot(
+                    n,
+                    [None, None, champ, champ],
+                    [0, 0],
+                    args.seed + 9,
+                    device,
+                    args.match_to,
+                ),
+            ]
+        else:
+            pool.append(
+                EnvSlot(
+                    n,
+                    [None, champ, champ, champ],
+                    [0],
+                    args.seed + 7,
+                    device,
+                    args.match_to,
+                )
+            )
+            pool.append(
+                EnvSlot(
+                    n,
+                    [None, None, champ, "greedy"],
+                    [0, 0],
+                    args.seed + 8,
+                    device,
+                    args.match_to,
+                )
+            )
 
     learner = PolicyNet(args.width, args.blocks).to(device)
     frozen = [
@@ -302,7 +423,21 @@ def main() -> int:
 
     if args.init_from:
         ckpt = torch.load(args.init_from, map_location=device, weights_only=True)
-        missing, _unexpected = learner.load_state_dict(ckpt["model"], strict=False)
+        state = ckpt["model"]
+        stem_w = state.get("trunk.0.weight")
+        if stem_w is not None and stem_w.shape[1] < OBS_LEN:
+            # Observation schema grew (append-only): pad new input columns
+            # with zeros so the net starts as an exact function of the old
+            # features and learns the new ones from there.
+            pad = torch.zeros(
+                stem_w.shape[0],
+                OBS_LEN - stem_w.shape[1],
+                dtype=stem_w.dtype,
+                device=stem_w.device,
+            )
+            state["trunk.0.weight"] = torch.cat([stem_w, pad], dim=1)
+            print(f"padded stem {stem_w.shape[1]} -> {OBS_LEN} inputs")
+        missing, _unexpected = learner.load_state_dict(state, strict=False)
         print(f"warm start from {args.init_from} (missing={missing})")
     if args.resume:
         ckpt = torch.load(args.resume, map_location=device, weights_only=True)

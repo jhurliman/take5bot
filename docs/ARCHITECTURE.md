@@ -98,6 +98,19 @@ resolved by measurement (63-103 ms/move needs neither). Next frontiers, if
 ever revisited: larger nets, multi-hour search-pressure training, and
 2-10-player conditioning.
 
+## Ceiling probes and match awareness (M8)
+
+Exploitability: a best-response net warm-started from the M7 champion and
+trained 1000 iters purely against it reaches only 26.2% win vs 3 raw-M7
+seats (25% = parity, 3000 games) and loses to the search champion (18.2%)
+— near-unexploitable within this model class, corroborating the flattening
+self-play curves. Match awareness: obs v3 appends carried standings
+(append-only; old nets read their prefix), VecGames match mode plays deals
+to 66 with a zero-sum outcome bonus, and the M8 generation trained with
+--match-to 66 wins 28.1% of matches vs standings-blind M7 seats (26.3%
+self-play calibration; ~1.8 fewer bulls per match) while holding a 51.6%
+per-deal search edge. The web app passes live standings to bots and coach.
+
 ## Legacy comparison
 
 `arena/legacy_bridge.py` plays the original v1 MuZero checkpoint (LightZero,

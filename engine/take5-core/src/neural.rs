@@ -80,6 +80,7 @@ pub struct NeuralOutput {
 }
 
 pub struct NeuralNet {
+    obs_len: usize,
     width: usize,
     stem: Linear,
     blocks: Vec<ResBlock>,
@@ -180,10 +181,12 @@ impl NeuralNet {
             }
             r.dtype = dtype;
         }
-        if obs_len != OBS_LEN || width == 0 || width > 8192 || num_blocks > 64 {
+        // Nets exported against older (shorter) observation layouts stay
+        // loadable: the layout is append-only, so they read the prefix.
+        if obs_len == 0 || obs_len > OBS_LEN || width == 0 || width > 8192 || num_blocks > 64 {
             return Err(NeuralError::BadShape);
         }
-        let stem = r.linear(width, OBS_LEN)?;
+        let stem = r.linear(width, obs_len)?;
         let mut blocks = Vec::with_capacity(num_blocks);
         for _ in 0..num_blocks {
             blocks.push(ResBlock {
@@ -200,6 +203,7 @@ impl NeuralNet {
             return Err(NeuralError::BadShape);
         }
         Ok(NeuralNet {
+            obs_len,
             width,
             stem,
             blocks,
@@ -210,10 +214,10 @@ impl NeuralNet {
     }
 
     pub fn forward(&self, obs: &[f32]) -> NeuralOutput {
-        debug_assert_eq!(obs.len(), OBS_LEN);
+        debug_assert!(obs.len() >= self.obs_len);
         let w = self.width;
         let mut h = vec![0.0f32; w];
-        self.stem.apply(obs, &mut h);
+        self.stem.apply(&obs[..self.obs_len], &mut h);
         relu(&mut h);
 
         let mut tmp1 = vec![0.0f32; w];

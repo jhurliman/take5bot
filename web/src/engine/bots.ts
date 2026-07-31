@@ -38,7 +38,8 @@ export interface SeatView {
   numPlayers: number;
   hand: number[]; // card ids
   rows: number[][]; // card ids per row
-  penalties: number[]; // bull totals per seat
+  penalties: number[]; // bull totals per seat (current deal)
+  totals: number[]; // match totals carried from previous deals, per seat
   played: number[]; // all publicly revealed card ids
   turn: number; // 0..9
 }
@@ -58,6 +59,7 @@ export function engineAnalyze(bot: EngineBot, view: SeatView): Map<number, numbe
     Uint8Array.from(rowsFlat),
     Uint8Array.from(rowLens),
     Uint16Array.from(view.penalties),
+    Uint16Array.from(view.totals),
     Uint8Array.from(view.played),
     view.turn,
   );
@@ -80,6 +82,7 @@ export function engineChooseCard(bot: EngineBot, view: SeatView): number {
     Uint8Array.from(rowsFlat),
     Uint8Array.from(rowLens),
     Uint16Array.from(view.penalties),
+    Uint16Array.from(view.totals),
     Uint8Array.from(view.played),
     view.turn,
   );

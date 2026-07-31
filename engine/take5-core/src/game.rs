@@ -36,6 +36,8 @@ pub struct View<'a> {
     pub player: u8,
     pub num_players: u8,
     pub hand: CardSet,
+    /// Match totals carried from previous deals (zeros in single-deal play).
+    pub totals: &'a [u16],
     /// Every card that has been publicly revealed: initial row starters plus
     /// every card played in a reveal (including cards now buried in penalty
     /// piles). This is the card-counting signal.
@@ -66,6 +68,9 @@ pub struct Game {
     phase: Phase,
     /// Revealed cards awaiting placement, ascending; index 0 is next.
     pending: Vec<(Card, u8)>,
+    /// Match totals carried from previous deals (match-to-66 context; zeros
+    /// for standalone deals). Not touched by deal resolution.
+    totals: Vec<u16>,
 }
 
 impl Game {
@@ -132,6 +137,7 @@ impl Game {
             turn,
             phase: Phase::Select,
             pending: Vec::new(),
+            totals: vec![0; num_players],
         })
     }
 
@@ -167,6 +173,7 @@ impl Game {
             turn,
             phase: Phase::Select,
             pending: Vec::new(),
+            totals: vec![0; num_players],
         })
     }
 
@@ -208,11 +215,23 @@ impl Game {
         self.played
     }
 
+    /// Set carried match totals (len = num_players). Affects observations
+    /// and bot views only; deal resolution ignores it.
+    pub fn set_totals(&mut self, totals: &[u16]) {
+        assert_eq!(totals.len(), self.num_players as usize);
+        self.totals = totals.to_vec();
+    }
+
+    pub fn totals(&self) -> &[u16] {
+        &self.totals
+    }
+
     pub fn view(&self, player: usize) -> View<'_> {
         View {
             player: player as u8,
             num_players: self.num_players,
             hand: self.hands[player],
+            totals: &self.totals,
             played: self.played,
             rows: &self.rows,
             penalties: &self.penalties,

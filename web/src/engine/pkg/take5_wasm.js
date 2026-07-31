@@ -24,11 +24,12 @@ export class EngineBot {
      * @param {Uint8Array} rows_flat
      * @param {Uint8Array} row_lens
      * @param {Uint16Array} penalties
+     * @param {Uint16Array} totals
      * @param {Uint8Array} played
      * @param {number} turn
      * @returns {Float32Array}
      */
-    analyze(player, num_players, hand, rows_flat, row_lens, penalties, played, turn) {
+    analyze(player, num_players, hand, rows_flat, row_lens, penalties, totals, played, turn) {
         const ptr0 = passArray8ToWasm0(hand, wasm.__wbindgen_malloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passArray8ToWasm0(rows_flat, wasm.__wbindgen_malloc);
@@ -37,15 +38,17 @@ export class EngineBot {
         const len2 = WASM_VECTOR_LEN;
         const ptr3 = passArray16ToWasm0(penalties, wasm.__wbindgen_malloc);
         const len3 = WASM_VECTOR_LEN;
-        const ptr4 = passArray8ToWasm0(played, wasm.__wbindgen_malloc);
+        const ptr4 = passArray16ToWasm0(totals, wasm.__wbindgen_malloc);
         const len4 = WASM_VECTOR_LEN;
-        const ret = wasm.enginebot_analyze(this.__wbg_ptr, player, num_players, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, turn);
+        const ptr5 = passArray8ToWasm0(played, wasm.__wbindgen_malloc);
+        const len5 = WASM_VECTOR_LEN;
+        const ret = wasm.enginebot_analyze(this.__wbg_ptr, player, num_players, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, turn);
         if (ret[3]) {
             throw takeFromExternrefTable0(ret[2]);
         }
-        var v6 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        var v7 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
         wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v6;
+        return v7;
     }
     /**
      * Pick a card to play from `hand`, given everything this seat can see.
@@ -57,11 +60,12 @@ export class EngineBot {
      * @param {Uint8Array} rows_flat
      * @param {Uint8Array} row_lens
      * @param {Uint16Array} penalties
+     * @param {Uint16Array} totals
      * @param {Uint8Array} played
      * @param {number} turn
      * @returns {number}
      */
-    choose_card(player, num_players, hand, rows_flat, row_lens, penalties, played, turn) {
+    choose_card(player, num_players, hand, rows_flat, row_lens, penalties, totals, played, turn) {
         const ptr0 = passArray8ToWasm0(hand, wasm.__wbindgen_malloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passArray8ToWasm0(rows_flat, wasm.__wbindgen_malloc);
@@ -70,9 +74,11 @@ export class EngineBot {
         const len2 = WASM_VECTOR_LEN;
         const ptr3 = passArray16ToWasm0(penalties, wasm.__wbindgen_malloc);
         const len3 = WASM_VECTOR_LEN;
-        const ptr4 = passArray8ToWasm0(played, wasm.__wbindgen_malloc);
+        const ptr4 = passArray16ToWasm0(totals, wasm.__wbindgen_malloc);
         const len4 = WASM_VECTOR_LEN;
-        const ret = wasm.enginebot_choose_card(this.__wbg_ptr, player, num_players, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, turn);
+        const ptr5 = passArray8ToWasm0(played, wasm.__wbindgen_malloc);
+        const len5 = WASM_VECTOR_LEN;
+        const ret = wasm.enginebot_choose_card(this.__wbg_ptr, player, num_players, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, turn);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }
@@ -86,12 +92,13 @@ export class EngineBot {
      * @param {Uint8Array} rows_flat
      * @param {Uint8Array} row_lens
      * @param {Uint16Array} penalties
+     * @param {Uint16Array} totals
      * @param {Uint8Array} played
      * @param {number} turn
      * @param {number} forced
      * @returns {number}
      */
-    choose_row(player, num_players, hand, rows_flat, row_lens, penalties, played, turn, forced) {
+    choose_row(player, num_players, hand, rows_flat, row_lens, penalties, totals, played, turn, forced) {
         const ptr0 = passArray8ToWasm0(hand, wasm.__wbindgen_malloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passArray8ToWasm0(rows_flat, wasm.__wbindgen_malloc);
@@ -100,9 +107,11 @@ export class EngineBot {
         const len2 = WASM_VECTOR_LEN;
         const ptr3 = passArray16ToWasm0(penalties, wasm.__wbindgen_malloc);
         const len3 = WASM_VECTOR_LEN;
-        const ptr4 = passArray8ToWasm0(played, wasm.__wbindgen_malloc);
+        const ptr4 = passArray16ToWasm0(totals, wasm.__wbindgen_malloc);
         const len4 = WASM_VECTOR_LEN;
-        const ret = wasm.enginebot_choose_row(this.__wbg_ptr, player, num_players, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, turn, forced);
+        const ptr5 = passArray8ToWasm0(played, wasm.__wbindgen_malloc);
+        const len5 = WASM_VECTOR_LEN;
+        const ret = wasm.enginebot_choose_row(this.__wbg_ptr, player, num_players, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, turn, forced);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }
