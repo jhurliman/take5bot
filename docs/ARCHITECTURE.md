@@ -84,6 +84,20 @@ overhead and weight upload would likely cost more than they save for
 currently runs on the main thread and can block a frame for ~100 ms), the
 right next step is moving the bot into a Web Worker — not GPU inference.
 
+## Strength program: closed at this scale
+
+Generational self-improvement (train vs frozen previous champion) was run
+twice: M6 beat M4 52.6% head-to-head, M7 beat M6 51.6% (6000 games) — gains
+are flattening, indicating convergence for this net size and training
+scale. Think-time scaling still works and is a runtime knob: 64 worlds
+beats 16 worlds 52.7% h2h, so the efficient axis is more determinizations
+(breadth), not deeper search — which is why SM-ISMCTS was evaluated and
+rejected: at any fixed latency it would trade away worlds in a game where
+hidden-hand uncertainty dominates. Web worker and WebGPU were likewise
+resolved by measurement (63-103 ms/move needs neither). Next frontiers, if
+ever revisited: larger nets, multi-hour search-pressure training, and
+2-10-player conditioning.
+
 ## Legacy comparison
 
 `arena/legacy_bridge.py` plays the original v1 MuZero checkpoint (LightZero,
