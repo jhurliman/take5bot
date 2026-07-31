@@ -111,6 +111,19 @@ to 66 with a zero-sum outcome bonus, and the M8 generation trained with
 self-play calibration; ~1.8 fewer bulls per match) while holding a 51.6%
 per-deal search edge. The web app passes live standings to bots and coach.
 
+## Capacity experiment (M9): bigger nets don't help
+
+A 1024-wide, 3-block net (4.5x parameters) trained from scratch under the
+full modern curriculum (match mode, M8 champion anchor, league) loses to
+the 512x2 champion head-to-head with search: 41.1% after 3000 iters, still
+42.9% after 6000 (~ the small-net lineage's cumulative budget). Its
+vs-greedy eval never reached the lineage's level. Conclusion: at this
+game's complexity the small net is not capacity-limited — strength lives
+in the accumulated curriculum, and the exploiter probe already showed the
+champion near-unexploitable. Attention/transformer encoders remain
+untested (expensive to port to the Rust/WASM inference path) but the
+near-unexploitability result bounds their possible gain tightly.
+
 ## Legacy comparison
 
 `arena/legacy_bridge.py` plays the original v1 MuZero checkpoint (LightZero,
