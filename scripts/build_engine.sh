@@ -12,5 +12,8 @@ case "$(uname -s)" in
 Darwin) src=engine/target/release/libtake5_engine.dylib ;;
 *) src=engine/target/release/libtake5_engine.so ;;
 esac
-cp "$src" py/take5_engine.so
+# Atomic install: running Python processes keep their mapped copy instead
+# of segfaulting on an in-place overwrite.
+cp "$src" py/take5_engine.so.new
+mv -f py/take5_engine.so.new py/take5_engine.so
 echo "Built py/take5_engine.so"

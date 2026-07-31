@@ -35,7 +35,7 @@ def run_deal(env, games: int, seats: int, rng: np.random.Generator):
         mask = mask.reshape(games * seats, CARDS)
         assert np.array_equal(mask, obs[:, :CARDS]), "mask must equal hand bits"
         assert mask.sum(axis=1).min() == TURNS - t, "hand size mismatch"
-        rewards, dones, finals = env.step(random_legal(mask, rng))
+        rewards, dones, finals, _, _ = env.step(random_legal(mask, rng))
         reward_sum += rewards
         expected_done = 1 if t == TURNS - 1 else 0
         assert (dones == expected_done).all(), f"bad dones at turn {t}"
@@ -114,6 +114,36 @@ def test_belief_targets() -> None:
                     assert got == seats - 1, (g, j, c, got)
 
 
+def test_match_mode() -> None:
+    games, seats = 8, 4
+    env = take5_engine.VecGames(games, [None] * seats, seed=13, match_to=66)
+    rng = np.random.default_rng(9)
+    matches_seen = 0
+    reward_sum = np.zeros(games * seats)
+    for _deal in range(40):  # plenty of deals for every match to finish
+        for _t in range(TURNS):
+            _, mask = env.observe()
+            m = mask.reshape(games * seats, CARDS)
+            rewards, dones, _finals, match_dones, match_finals = env.step(
+                random_legal(m, rng)
+            )
+            reward_sum += rewards
+        assert dones.all()
+        for g in np.flatnonzero(match_dones):
+            totals = match_finals[g * seats : (g + 1) * seats]
+            assert totals.max() >= 66, "match must end only when someone busts"
+            assert totals.min() > 0
+            matches_seen += 1
+    assert matches_seen >= games, "every game should complete at least one match"
+    # Standings appear in the observation tail (v3 layout, seat-relative /66).
+    obs, _ = env.observe()
+    obs = obs.reshape(games, seats, take5_engine.obs_len())
+    assert obs[:, :, 264:274].max() > 0, "carried totals should be visible mid-match"
+    # Rewards stay zero-sum per game even with the match bonus.
+    per_game = reward_sum.reshape(games, seats).sum(axis=1)
+    assert np.abs(per_game).max() < 1e-3
+
+
 def test_rejects_illegal() -> None:
     env = take5_engine.VecGames(2, [None] * 4, seed=0)
     try:
@@ -128,6 +158,7 @@ def main() -> int:
     test_determinism()
     test_bot_seats()
     test_belief_targets()
+    test_match_mode()
     test_rejects_illegal()
     print("VEC GAMES OK")
     return 0

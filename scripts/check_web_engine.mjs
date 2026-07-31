@@ -28,6 +28,7 @@ const card = bot.choose_card(
   Uint8Array.from(rows.flat()),
   Uint8Array.from(rows.map((r) => r.length)),
   Uint16Array.from([0, 0, 0, 0]),
+  Uint16Array.from([12, 40, 7, 63]), // carried match totals (standings-aware bot)
   Uint8Array.from(rows.flat()),
   8,
 );

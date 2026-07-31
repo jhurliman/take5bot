@@ -290,6 +290,7 @@ export default function Take5App() {
       hand: current.players[pid].hand.map((c) => c.id),
       rows: current.rows.map((r) => r.map((c) => c.id)),
       penalties: current.players.map((p) => sumBulls(p.pen)),
+      totals: current.players.map((p) => current.totals[p.id]),
       played: [
         ...current.rows.flat().map((c) => c.id),
         ...current.players.flatMap((p) => p.pen.map((c) => c.id)),

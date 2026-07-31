@@ -15,21 +15,28 @@
 //!   [261]       cards left in own hand /10
 //!   [262]       1 if we are resolving our own forced row choice
 //!   [263]       the forced card /104 (0 otherwise)
+//!   [264..274)  match totals carried from previous deals /66, seat-relative
+//!               (self first), zero-padded to 10 — zeros in single-deal play
+//!   [274]       highest carried total at the table /66 (match urgency)
+//!   [275]       own headroom to 66: (66 - own carried total) /66, floor 0
 //!
-//! Total: 264. Bullhead values are intentionally not encoded: they are a
+//! Total: 276 (v3; [0..264) is exactly the v2 layout, so nets exported
+//! against v2 observations read the prefix unchanged). Bullhead values are intentionally not encoded: they are a
 //! deterministic function of card id, learned trivially by an embedding.
 
 use crate::cards::{set_contains, set_len, Card, NUM_CARDS};
 use crate::game::{Game, Phase, View, MAX_PLAYERS, MAX_ROW_LEN, ROWS};
 use crate::{bullheads, HAND_SIZE};
 
-pub const OBS_LEN: usize = 264;
+pub const OBS_LEN: usize = 276;
 
 const ROW_SLOTS_OFF: usize = 2 * NUM_CARDS;
 const ROW_SUMMARY_OFF: usize = ROW_SLOTS_OFF + ROWS * MAX_ROW_LEN;
 const PENALTY_OFF: usize = ROW_SUMMARY_OFF + ROWS * 3;
 const SEAT_MASK_OFF: usize = PENALTY_OFF + MAX_PLAYERS;
 const SCALAR_OFF: usize = SEAT_MASK_OFF + MAX_PLAYERS;
+const TOTALS_OFF: usize = SCALAR_OFF + 4;
+const MATCH_SCALAR_OFF: usize = TOTALS_OFF + MAX_PLAYERS;
 
 /// Encode `player`'s observation of `game` into `out` (length `OBS_LEN`).
 pub fn encode_observation(game: &Game, player: usize, out: &mut [f32]) {
@@ -81,6 +88,16 @@ pub fn encode_view(view: &View, forced: Option<Card>, out: &mut [f32]) {
         out[SCALAR_OFF + 2] = 1.0;
         out[SCALAR_OFF + 3] = card as f32 / NUM_CARDS as f32;
     }
+
+    let mut max_total = 0u16;
+    for i in 0..n {
+        let seat = (player + i) % n;
+        let t = view.totals[seat];
+        out[TOTALS_OFF + i] = (t as f32 / 66.0).min(1.5);
+        max_total = max_total.max(t);
+    }
+    out[MATCH_SCALAR_OFF] = (max_total as f32 / 66.0).min(1.5);
+    out[MATCH_SCALAR_OFF + 1] = (66.0 - view.totals[player] as f32).max(0.0) / 66.0;
 }
 
 #[cfg(test)]

@@ -215,14 +215,16 @@ impl McRolloutBot {
             }
         }
 
-        Game::from_position(
+        let mut game = Game::from_position(
             hands,
             view.rows.clone(),
             view.penalties.to_vec(),
             view.played,
             view.turn,
         )
-        .expect("view state is always valid")
+        .expect("view state is always valid");
+        game.set_totals(view.totals);
+        game
     }
 
     /// Play `game` to the end of the deal with all seats greedy.
@@ -371,14 +373,16 @@ impl NeuralSearchBot {
             }
         }
 
-        Game::from_position(
+        let mut game = Game::from_position(
             hands,
             view.rows.clone(),
             view.penalties.to_vec(),
             view.played,
             view.turn,
         )
-        .expect("view state is always valid")
+        .expect("view state is always valid");
+        game.set_totals(view.totals);
+        game
     }
 }
 
@@ -516,6 +520,7 @@ mod tests {
             player: 0,
             num_players: 4,
             hand: hand_of(&[36, 90]),
+            totals: &[0, 0, 0, 0],
             played: {
                 let mut p: CardSet = 0;
                 for &c in &[4, 15, 20, 25, 30, 31, 35, 80] {

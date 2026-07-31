@@ -104,6 +104,7 @@ impl EngineBot {
         rows_flat: &[u8],
         row_lens: &[u8],
         penalties: &[u16],
+        totals: &[u16],
         played: &[u8],
         turn: u8,
     ) -> Result<u8, JsError> {
@@ -114,10 +115,14 @@ impl EngineBot {
             return Err(JsError::new("bad player/penalties"));
         }
         let rows = to_rows(rows_flat, row_lens)?;
+        if totals.len() != penalties.len() {
+            return Err(JsError::new("totals length must match penalties"));
+        }
         let view = View {
             player,
             num_players,
             hand: to_set(hand)?,
+            totals,
             played: to_set(played)?,
             rows: &rows,
             penalties,
@@ -136,15 +141,20 @@ impl EngineBot {
         rows_flat: &[u8],
         row_lens: &[u8],
         penalties: &[u16],
+        totals: &[u16],
         played: &[u8],
         turn: u8,
         forced: u8,
     ) -> Result<u8, JsError> {
         let rows = to_rows(rows_flat, row_lens)?;
+        if totals.len() != penalties.len() {
+            return Err(JsError::new("totals length must match penalties"));
+        }
         let view = View {
             player,
             num_players,
             hand: to_set(hand)?,
+            totals,
             played: to_set(played)?,
             rows: &rows,
             penalties,
@@ -167,6 +177,7 @@ impl EngineBot {
         rows_flat: &[u8],
         row_lens: &[u8],
         penalties: &[u16],
+        totals: &[u16],
         played: &[u8],
         turn: u8,
     ) -> Result<Vec<f32>, JsError> {
@@ -177,10 +188,14 @@ impl EngineBot {
             return Err(JsError::new("hand is empty"));
         }
         let rows = to_rows(rows_flat, row_lens)?;
+        if totals.len() != penalties.len() {
+            return Err(JsError::new("totals length must match penalties"));
+        }
         let view = View {
             player,
             num_players,
             hand: to_set(hand)?,
+            totals,
             played: to_set(played)?,
             rows: &rows,
             penalties,

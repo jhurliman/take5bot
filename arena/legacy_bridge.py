@@ -138,7 +138,7 @@ def main() -> int:
             logits = result.policy_logits[:, :CARDS].numpy()
             logits[mask < 0.5] = -np.inf
             acts = logits.argmax(axis=1) + 1
-            _, dones, finals = env.step(acts.astype(np.int64))
+            _, dones, finals, _, _ = env.step(acts.astype(np.int64))
     assert dones.all()
 
     pens = finals.reshape(args.games, n)

@@ -32,6 +32,11 @@ pub struct VecGames {
     policy_seats: Vec<usize>,
     num_players: usize,
     seed_stream: SplitMix64,
+    /// Match mode: deals accumulate bull totals until someone reaches this
+    /// (then the match ends, a win/loss bonus lands on the final step's
+    /// rewards, and totals reset). 0 = independent single deals.
+    match_to: u16,
+    totals: Vec<Vec<u16>>,
 }
 
 impl VecGames {
@@ -54,8 +59,13 @@ impl VecGames {
     /// `specs[seat]` is None for a policy seat or a bot spec string
     /// ("random" | "lowest" | "greedy" | "mc" | "mc:<worlds>").
     #[new]
-    #[pyo3(signature = (num_games, specs, seed=0))]
-    fn new(num_games: usize, specs: Vec<Option<String>>, seed: u64) -> PyResult<Self> {
+    #[pyo3(signature = (num_games, specs, seed=0, match_to=0))]
+    fn new(
+        num_games: usize,
+        specs: Vec<Option<String>>,
+        seed: u64,
+        match_to: u16,
+    ) -> PyResult<Self> {
         let num_players = specs.len();
         if !(2..=MAX_PLAYERS).contains(&num_players) {
             return Err(PyValueError::new_err("provide 2..=10 seat specs"));
@@ -100,6 +110,8 @@ impl VecGames {
             policy_seats,
             num_players,
             seed_stream,
+            match_to,
+            totals: vec![vec![0; num_players]; num_games],
         })
     }
 
@@ -195,6 +207,8 @@ impl VecGames {
         Bound<'py, PyArray1<f32>>,
         Bound<'py, PyArray1<u8>>,
         Bound<'py, PyArray1<f32>>,
+        Bound<'py, PyArray1<u8>>,
+        Bound<'py, PyArray1<f32>>,
     )> {
         let k = self.policy_seats.len();
         let n = self.num_players;
@@ -236,12 +250,18 @@ impl VecGames {
             rewards: &'a mut [f32],
             done: &'a mut u8,
             finals: &'a mut [f32],
+            totals: &'a mut Vec<u16>,
+            match_done: &'a mut u8,
+            match_finals: &'a mut [f32],
         }
 
         let policy_seats = &self.policy_seats;
+        let match_to = self.match_to;
         let mut rewards = vec![0.0f32; num_games * k];
         let mut dones = vec![0u8; num_games];
         let mut finals = vec![0.0f32; num_games * n];
+        let mut match_dones = vec![0u8; num_games];
+        let mut match_finals = vec![0.0f32; num_games * n];
 
         {
             let mut items: Vec<Work> = self
@@ -254,8 +274,20 @@ impl VecGames {
                 .zip(rewards.chunks_mut(k))
                 .zip(dones.iter_mut())
                 .zip(finals.chunks_mut(n))
+                .zip(self.totals.iter_mut())
+                .zip(match_dones.iter_mut())
+                .zip(match_finals.chunks_mut(n))
                 .map(
-                    |(((((((game, bots), rng), acts), seed), rewards), done), finals)| Work {
+                    |(
+                        (
+                            (
+                                (((((((game, bots), rng), acts), seed), rewards), done), finals),
+                                totals,
+                            ),
+                            match_done,
+                        ),
+                        match_finals,
+                    )| Work {
                         game,
                         bots,
                         rng,
@@ -264,6 +296,9 @@ impl VecGames {
                         rewards,
                         done,
                         finals,
+                        totals,
+                        match_done,
+                        match_finals,
                     },
                 )
                 .collect();
@@ -296,7 +331,34 @@ impl VecGames {
                     for p in 0..n {
                         w.finals[p] = w.game.penalties()[p] as f32;
                     }
+                    if match_to > 0 {
+                        for p in 0..n {
+                            w.totals[p] += w.game.penalties()[p];
+                        }
+                        if w.totals.iter().any(|&t| t >= match_to) {
+                            // Match over: zero-sum outcome bonus on this
+                            // step's rewards (lowest total wins, ties split).
+                            *w.match_done = 1;
+                            let best = *w.totals.iter().min().expect("non-empty");
+                            let winners = w.totals.iter().filter(|&&t| t == best).count() as f32;
+                            for (j, &seat) in policy_seats.iter().enumerate() {
+                                let share = if w.totals[seat] == best {
+                                    1.0 / winners
+                                } else {
+                                    0.0
+                                };
+                                w.rewards[j] += 10.0 * (share - 1.0 / n as f32);
+                            }
+                            for p in 0..n {
+                                w.match_finals[p] = w.totals[p] as f32;
+                                w.totals[p] = 0;
+                            }
+                        }
+                    }
                     *w.game = Game::deal(n, w.reset_seed).expect("valid count");
+                    if match_to > 0 {
+                        w.game.set_totals(w.totals);
+                    }
                 }
             };
 
@@ -328,6 +390,8 @@ impl VecGames {
             rewards.into_pyarray(py),
             dones.into_pyarray(py),
             finals.into_pyarray(py),
+            match_dones.into_pyarray(py),
+            match_finals.into_pyarray(py),
         ))
     }
 
