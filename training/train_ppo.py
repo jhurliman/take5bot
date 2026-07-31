@@ -120,7 +120,8 @@ class AttnNet(nn.Module):
             batch_first=True,
             norm_first=True,
         )
-        self.encoder = nn.TransformerEncoder(layer, layers)
+        # Pre-LN encoders need a final norm (PyTorch omits it by default).
+        self.encoder = nn.TransformerEncoder(layer, layers, norm=nn.LayerNorm(d_model))
         self.policy = nn.Linear(d_model, 1)
         self.value = nn.Linear(d_model, 1)
         self.belief = nn.Linear(d_model, BELIEF_CLASSES)
