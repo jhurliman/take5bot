@@ -199,6 +199,18 @@ distillation, since direct PPO fails on the transformer at every
 learning rate tried. The in-class exploitability probe (26.2%) indeed
 did not bound the out-of-class gain, exactly as the review cautioned.
 
+**Exploitability of the new champion** (corrected single-learner-seat
+pools; champion seats driven by the frozen torch net at argmax via
+--opponent-ckpt, since engine-bot attention opponents throttle rollouts
+~150x): an MLP best-response warm-started from M10 and trained 1000
+iters purely against M11 finishes *below* parity — 20.6% win vs 3 raw
+M11 seats (3000 deals, 25% = parity) — the entire MLP class cannot even
+draw with the transformer. A same-class attention best-response
+warm-started from M11 itself reaches 25.9%, within noise of parity:
+M11 is near-unexploitable in its own class. With the champion strictly
+dominating the old class and measuring clean on the corrected probe,
+the strength program closes again at this scale — one tier higher.
+
 ## Legacy comparison
 
 `arena/legacy_bridge.py` plays the original v1 MuZero checkpoint (LightZero,
