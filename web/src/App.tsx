@@ -95,7 +95,7 @@ const DIFFICULTIES: Array<{ id: BotStrategyId; label: string; blurb: string }> =
   { id: "random", label: "Random", blurb: "Plays any card" },
   { id: "greedy", label: "Greedy", blurb: "Avoids obvious hits" },
   { id: "mc", label: "Search", blurb: "Monte-Carlo search (Rust/WASM)" },
-  { id: "neural", label: "Neural", blurb: "Trained net + belief search" },
+  { id: "neural", label: "Neural", blurb: "Trained transformer policy (strongest)" },
 ];
 
 function usesEngine(strategy: BotStrategyId): boolean {
@@ -269,14 +269,16 @@ export default function Take5App() {
     setState(deal(pCount, s, diff));
   }
 
-  /** Lazily boot the WASM engine and per-seat bots for the current game. */
+  /** Lazily boot the WASM engine and per-seat bots for the current game.
+   * "Neural" opponents play the raw transformer policy (M11) — it beats
+   * the MLP-with-search champion head-to-head without any search. */
   async function ensureEngineBots(current: GameState): Promise<Map<PlayerId, EngineBot>> {
-    await loadEngine(difficulty === "neural");
+    await loadEngine(false, difficulty === "neural");
     for (const p of current.players) {
       if (!p.isHuman && usesEngine(p.strategy || difficulty) && !engineBots.current.has(p.id)) {
         engineBots.current.set(
           p.id,
-          createEngineBot(p.strategy === "mc" ? "mc" : "neural", current.seed + p.id),
+          createEngineBot(p.strategy === "mc" ? "mc" : "attn", current.seed + p.id),
         );
       }
     }

@@ -5,27 +5,36 @@
 
 import init, { EngineBot } from "./pkg/take5_wasm";
 
-export type EngineKind = "mc" | "neural";
+export type EngineKind = "mc" | "neural" | "attn";
 
 let wasmReady: Promise<unknown> | null = null;
 let netBytes: Uint8Array | null = null;
+let attnBytes: Uint8Array | null = null;
 
-/** Idempotent; the WASM module and (optionally) the ~6 MB weights blob are
- * fetched once and cached for the session. */
-export async function loadEngine(needNet: boolean): Promise<void> {
-  wasmReady ??= init();
-  await wasmReady;
-  if (needNet && !netBytes) {
-    const res = await fetch(`${import.meta.env.BASE_URL}net.t5n`);
-    if (!res.ok) throw new Error(`failed to fetch net.t5n: ${res.status}`);
-    netBytes = new Uint8Array(await res.arrayBuffer());
-  }
+async function fetchWeights(name: string): Promise<Uint8Array> {
+  const res = await fetch(`${import.meta.env.BASE_URL}${name}`);
+  if (!res.ok) throw new Error(`failed to fetch ${name}: ${res.status}`);
+  return new Uint8Array(await res.arrayBuffer());
 }
 
-/** Requires a prior successful `loadEngine`. Browser search sizes are
- * tuned for main-thread latency: mc:64 ≈ instant, neural:16 ≈ 100-400 ms
- * per move. */
+/** Idempotent; the WASM module and any needed weight blobs (~3 MB each)
+ * are fetched once and cached for the session. `needNet` = the MLP search
+ * net (coach); `needAttn` = the transformer policy (strongest player). */
+export async function loadEngine(needNet: boolean, needAttn = false): Promise<void> {
+  wasmReady ??= init();
+  await wasmReady;
+  if (needNet && !netBytes) netBytes = await fetchWeights("net.t5n");
+  if (needAttn && !attnBytes) attnBytes = await fetchWeights("net-attn.t5n");
+}
+
+/** Requires a prior successful `loadEngine`. Browser latencies: mc:64 ≈
+ * instant, neural:16 (MLP + belief search, coach) ≈ 100-400 ms, attn raw
+ * policy ≈ 100-300 ms per move. */
 export function createEngineBot(kind: EngineKind, seed: number): EngineBot {
+  if (kind === "attn") {
+    if (!attnBytes) throw new Error("engine not loaded with attn weights");
+    return new EngineBot("neural:0", attnBytes, BigInt(seed >>> 0));
+  }
   if (kind === "neural") {
     if (!netBytes) throw new Error("engine not loaded with weights");
     return new EngineBot("neural:16", netBytes, BigInt(seed >>> 0));

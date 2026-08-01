@@ -1,12 +1,20 @@
-//! Minimal forward-pass implementation of the trained PolicyNet (see
-//! `training/train_ppo.py`): Linear stem + ReLU, residual blocks
-//! (Linear-ReLU-Linear + skip, LayerNorm, ReLU), then policy / value /
-//! belief heads. Pure Rust, no BLAS — a single forward is ~1.4 MFLOPs,
-//! microseconds on native and fast enough in WASM.
+//! Minimal forward-pass implementation of the trained nets (see
+//! `training/train_ppo.py`). Two architectures share one weight-blob
+//! loader and output shape:
 //!
-//! Weights load from a flat little-endian f32 blob written by
+//! - MLP ("T5N1"/"T5N2"): Linear stem + ReLU, residual blocks
+//!   (Linear-ReLU-Linear + skip, LayerNorm, ReLU), then policy / value /
+//!   belief heads. ~1.4 MFLOPs per forward.
+//! - Attention ("T5N3"): one token per card (features rebuilt here from
+//!   the observation, mirroring AttnNet._card_features) plus a CLS token,
+//!   pre-LN transformer encoder with a final LayerNorm, per-card-token
+//!   policy/belief heads and a CLS value head. ~400 MFLOPs per forward —
+//!   fine for raw-policy play, too slow to wrap in determinized search.
+//!
+//! Weights load from a flat little-endian blob written by
 //! `training/export_net.py` (format documented there and in `from_bytes`).
 
+use crate::cards::bullheads;
 use crate::obs::OBS_LEN;
 
 pub const POLICY_OUT: usize = crate::cards::NUM_CARDS;
@@ -14,9 +22,14 @@ pub const BELIEF_CLASSES: usize = 4; // 3 opponents + stock (4-player nets)
 pub const BELIEF_OUT: usize = POLICY_OUT * BELIEF_CLASSES;
 const MAGIC_V1: u32 = 0x5435_4E31; // "T5N1": f32 weights
 const MAGIC_V2: u32 = 0x5435_4E32; // "T5N2": header gains a dtype field
+const MAGIC_V3: u32 = 0x5435_4E33; // "T5N3": attention encoder
 const DTYPE_F32: u32 = 0;
 const DTYPE_F16: u32 = 1;
 const LN_EPS: f32 = 1e-5;
+const NUM_CARDS: usize = crate::cards::NUM_CARDS;
+const GLOBAL_OFF: usize = 2 * NUM_CARDS; // obs tail fed to the CLS token
+const CARD_FEATS: usize = 8;
+const TOKENS: usize = NUM_CARDS + 1; // CLS + one per card
 
 /// IEEE 754 half -> single precision (handles subnormals/inf/nan).
 fn f16_to_f32(h: u16) -> f32 {
@@ -79,8 +92,7 @@ pub struct NeuralOutput {
     pub belief_logits: Vec<f32>,
 }
 
-pub struct NeuralNet {
-    obs_len: usize,
+struct MlpNet {
     width: usize,
     stem: Linear,
     blocks: Vec<ResBlock>,
@@ -89,14 +101,59 @@ pub struct NeuralNet {
     belief: Linear,
 }
 
+struct AttnLayer {
+    in_proj: Linear,  // [3d][d]: packed q, k, v
+    out_proj: Linear, // [d][d]
+    lin1: Linear,     // [4d][d]
+    lin2: Linear,     // [d][4d]
+    n1_g: Vec<f32>,
+    n1_b: Vec<f32>,
+    n2_g: Vec<f32>,
+    n2_b: Vec<f32>,
+}
+
+struct AttnNet {
+    d: usize,
+    heads: usize,
+    card_emb: Vec<f32>, // [NUM_CARDS][d]
+    feat: Linear,       // [d][CARD_FEATS]
+    glob: Linear,       // [d][obs_len - GLOBAL_OFF]
+    cls: Vec<f32>,      // [d]
+    layers: Vec<AttnLayer>,
+    fin_g: Vec<f32>,
+    fin_b: Vec<f32>,
+    policy: Linear, // [1][d], applied per card token
+    value: Linear,  // [1][d], applied to CLS
+    belief: Linear, // [BELIEF_CLASSES][d], applied per card token
+}
+
+enum NetKind {
+    Mlp(MlpNet),
+    Attn(AttnNet),
+}
+
+pub struct NeuralNet {
+    obs_len: usize,
+    kind: NetKind,
+}
+
 impl std::fmt::Debug for NeuralNet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "NeuralNet(width={}, blocks={})",
-            self.width,
-            self.blocks.len()
-        )
+        match &self.kind {
+            NetKind::Mlp(m) => write!(
+                f,
+                "NeuralNet(mlp, width={}, blocks={})",
+                m.width,
+                m.blocks.len()
+            ),
+            NetKind::Attn(a) => write!(
+                f,
+                "NeuralNet(attn, d={}, layers={}, heads={})",
+                a.d,
+                a.layers.len(),
+                a.heads
+            ),
+        }
     }
 }
 
@@ -156,11 +213,17 @@ impl<'a> Reader<'a> {
 }
 
 impl NeuralNet {
-    /// Format: u32 magic ("T5N1" = f32; "T5N2" adds a u32 dtype field,
+    /// MLP format: u32 magic ("T5N1" = f32; "T5N2" adds a u32 dtype field,
     /// 0 = f32, 1 = f16), u32 width, u32 blocks, u32 obs_len, [u32 dtype,]
     /// then LE tensors in order: stem(w,b); per block lin1(w,b), lin2(w,b),
     /// ln gamma, ln beta; policy(w,b); value(w,b); belief(w,b). Linear
     /// weights are [out][in] row-major (PyTorch convention).
+    ///
+    /// Attention format ("T5N3"): u32 magic, u32 d_model, u32 layers,
+    /// u32 obs_len, u32 dtype, u32 heads, then card_emb; feat(w,b);
+    /// glob(w,b); cls; per layer in_proj(w,b), out_proj(w,b), linear1(w,b),
+    /// linear2(w,b), norm1(g,b), norm2(g,b); final norm(g,b); policy(w,b);
+    /// value(w,b); belief(w,b).
     pub fn from_bytes(data: &[u8]) -> Result<NeuralNet, NeuralError> {
         let mut r = Reader {
             data,
@@ -168,6 +231,9 @@ impl NeuralNet {
             dtype: DTYPE_F32,
         };
         let magic = r.u32()?;
+        if magic == MAGIC_V3 {
+            return Self::attn_from_reader(r, data.len());
+        }
         if magic != MAGIC_V1 && magic != MAGIC_V2 {
             return Err(NeuralError::BadMagic);
         }
@@ -204,20 +270,103 @@ impl NeuralNet {
         }
         Ok(NeuralNet {
             obs_len,
-            width,
-            stem,
-            blocks,
-            policy,
-            value,
-            belief,
+            kind: NetKind::Mlp(MlpNet {
+                width,
+                stem,
+                blocks,
+                policy,
+                value,
+                belief,
+            }),
+        })
+    }
+
+    fn attn_from_reader(mut r: Reader, data_len: usize) -> Result<NeuralNet, NeuralError> {
+        let d = r.u32()? as usize;
+        let num_layers = r.u32()? as usize;
+        let obs_len = r.u32()? as usize;
+        let dtype = r.u32()?;
+        if dtype != DTYPE_F32 && dtype != DTYPE_F16 {
+            return Err(NeuralError::BadShape);
+        }
+        r.dtype = dtype;
+        let heads = r.u32()? as usize;
+        if d == 0
+            || d > 2048
+            || num_layers == 0
+            || num_layers > 32
+            || heads == 0
+            || !d.is_multiple_of(heads)
+            || obs_len <= GLOBAL_OFF
+            || obs_len > OBS_LEN
+        {
+            return Err(NeuralError::BadShape);
+        }
+        let card_emb = r.f32s(NUM_CARDS * d)?;
+        let feat = r.linear(d, CARD_FEATS)?;
+        let glob = r.linear(d, obs_len - GLOBAL_OFF)?;
+        let cls = r.f32s(d)?;
+        let mut layers = Vec::with_capacity(num_layers);
+        for _ in 0..num_layers {
+            layers.push(AttnLayer {
+                in_proj: r.linear(3 * d, d)?,
+                out_proj: r.linear(d, d)?,
+                lin1: r.linear(4 * d, d)?,
+                lin2: r.linear(d, 4 * d)?,
+                n1_g: r.f32s(d)?,
+                n1_b: r.f32s(d)?,
+                n2_g: r.f32s(d)?,
+                n2_b: r.f32s(d)?,
+            });
+        }
+        let fin_g = r.f32s(d)?;
+        let fin_b = r.f32s(d)?;
+        let policy = r.linear(1, d)?;
+        let value = r.linear(1, d)?;
+        let belief = r.linear(BELIEF_CLASSES, d)?;
+        if r.pos != data_len {
+            return Err(NeuralError::BadShape);
+        }
+        Ok(NeuralNet {
+            obs_len,
+            kind: NetKind::Attn(AttnNet {
+                d,
+                heads,
+                card_emb,
+                feat,
+                glob,
+                cls,
+                layers,
+                fin_g,
+                fin_b,
+                policy,
+                value,
+                belief,
+            }),
         })
     }
 
     pub fn forward(&self, obs: &[f32]) -> NeuralOutput {
         debug_assert!(obs.len() >= self.obs_len);
+        match &self.kind {
+            NetKind::Mlp(m) => m.forward(&obs[..self.obs_len]),
+            NetKind::Attn(a) => a.forward(&obs[..self.obs_len]),
+        }
+    }
+
+    /// Belief probabilities for one card: 3 relative opponents then stock.
+    /// `num_players` beyond 4 is unsupported (net is trained for 4).
+    pub fn belief_probs(out: &NeuralOutput, card_idx: usize) -> [f32; BELIEF_CLASSES] {
+        let logits = &out.belief_logits[card_idx * BELIEF_CLASSES..(card_idx + 1) * BELIEF_CLASSES];
+        softmax4(logits)
+    }
+}
+
+impl MlpNet {
+    fn forward(&self, obs: &[f32]) -> NeuralOutput {
         let w = self.width;
         let mut h = vec![0.0f32; w];
-        self.stem.apply(&obs[..self.obs_len], &mut h);
+        self.stem.apply(obs, &mut h);
         relu(&mut h);
 
         let mut tmp1 = vec![0.0f32; w];
@@ -245,12 +394,155 @@ impl NeuralNet {
             belief_logits,
         }
     }
+}
 
-    /// Belief probabilities for one card: 3 relative opponents then stock.
-    /// `num_players` beyond 4 is unsupported (net is trained for 4).
-    pub fn belief_probs(out: &NeuralOutput, card_idx: usize) -> [f32; BELIEF_CLASSES] {
-        let logits = &out.belief_logits[card_idx * BELIEF_CLASSES..(card_idx + 1) * BELIEF_CLASSES];
-        softmax4(logits)
+impl AttnNet {
+    /// Mirror of `AttnNet._card_features` in training/train_ppo.py: any
+    /// drift between the two is caught by tests/test_neural_parity.py.
+    fn card_features(obs: &[f32], f: &mut [f32]) {
+        for c in 0..NUM_CARDS {
+            let row = &mut f[c * CARD_FEATS..(c + 1) * CARD_FEATS];
+            row[0] = obs[c];
+            row[1] = obs[NUM_CARDS + c];
+            row[2] = bullheads((c + 1) as u8) as f32 / 7.0;
+            row[3] = (c + 1) as f32 / NUM_CARDS as f32;
+            row[4] = 0.0;
+            row[5] = 0.0;
+            row[6] = 0.0;
+            row[7] = 0.0;
+        }
+        let mut ids = [0usize; 20];
+        let mut row_len = [0usize; 4];
+        for (i, id) in ids.iter_mut().enumerate() {
+            *id = (obs[GLOBAL_OFF + i] * NUM_CARDS as f32).round() as usize;
+            if *id > 0 {
+                row_len[i / 5] += 1;
+            }
+        }
+        for (i, &id) in ids.iter().enumerate() {
+            if id == 0 {
+                continue;
+            }
+            let row = &mut f[(id - 1) * CARD_FEATS..id * CARD_FEATS];
+            row[4] = 1.0;
+            row[5] = (i / 5) as f32 / 3.0;
+            row[6] = (i % 5) as f32 / 4.0;
+            row[7] = if (i % 5) + 1 == row_len[i / 5] {
+                1.0
+            } else {
+                0.0
+            };
+        }
+    }
+
+    fn forward(&self, obs: &[f32]) -> NeuralOutput {
+        let d = self.d;
+        let mut x = vec![0.0f32; TOKENS * d];
+
+        // CLS token: learned vector + projected observation tail.
+        self.glob.apply(&obs[GLOBAL_OFF..], &mut x[..d]);
+        for (xe, ce) in x[..d].iter_mut().zip(&self.cls) {
+            *xe += ce;
+        }
+        // Card tokens: projected features + learned card embedding.
+        let mut feats = vec![0.0f32; NUM_CARDS * CARD_FEATS];
+        Self::card_features(obs, &mut feats);
+        for c in 0..NUM_CARDS {
+            let tok = &mut x[(1 + c) * d..(2 + c) * d];
+            self.feat
+                .apply(&feats[c * CARD_FEATS..(c + 1) * CARD_FEATS], tok);
+            for (te, ee) in tok.iter_mut().zip(&self.card_emb[c * d..(c + 1) * d]) {
+                *te += ee;
+            }
+        }
+
+        let dh = d / self.heads;
+        let scale = 1.0 / (dh as f32).sqrt();
+        let mut q = vec![0.0f32; TOKENS * d];
+        let mut k = vec![0.0f32; TOKENS * d];
+        let mut v = vec![0.0f32; TOKENS * d];
+        let mut attn = vec![0.0f32; TOKENS * d];
+        let mut ln = vec![0.0f32; d];
+        let mut qkv = vec![0.0f32; 3 * d];
+        let mut ff = vec![0.0f32; 4 * d];
+        let mut tmp = vec![0.0f32; d];
+        let mut scores = [0.0f32; TOKENS];
+
+        for layer in &self.layers {
+            // Pre-LN self-attention block: x += out_proj(attn(norm1(x))).
+            for t in 0..TOKENS {
+                layer_norm(&x[t * d..(t + 1) * d], &layer.n1_g, &layer.n1_b, &mut ln);
+                layer.in_proj.apply(&ln, &mut qkv);
+                q[t * d..(t + 1) * d].copy_from_slice(&qkv[..d]);
+                k[t * d..(t + 1) * d].copy_from_slice(&qkv[d..2 * d]);
+                v[t * d..(t + 1) * d].copy_from_slice(&qkv[2 * d..]);
+            }
+            attn.fill(0.0);
+            for h in 0..self.heads {
+                let off = h * dh;
+                for i in 0..TOKENS {
+                    let qi = &q[i * d + off..i * d + off + dh];
+                    for (j, s) in scores.iter_mut().enumerate() {
+                        let kj = &k[j * d + off..j * d + off + dh];
+                        let mut acc = 0.0f32;
+                        for e in 0..dh {
+                            acc += qi[e] * kj[e];
+                        }
+                        *s = acc * scale;
+                    }
+                    softmax_inplace(&mut scores);
+                    let out = i * d + off;
+                    for (j, &p) in scores.iter().enumerate() {
+                        let vj = &v[j * d + off..j * d + off + dh];
+                        for e in 0..dh {
+                            attn[out + e] += p * vj[e];
+                        }
+                    }
+                }
+            }
+            for t in 0..TOKENS {
+                layer.out_proj.apply(&attn[t * d..(t + 1) * d], &mut tmp);
+                for e in 0..d {
+                    x[t * d + e] += tmp[e];
+                }
+            }
+            // Pre-LN feed-forward block: x += lin2(relu(lin1(norm2(x)))).
+            for t in 0..TOKENS {
+                layer_norm(&x[t * d..(t + 1) * d], &layer.n2_g, &layer.n2_b, &mut ln);
+                layer.lin1.apply(&ln, &mut ff);
+                relu(&mut ff);
+                layer.lin2.apply(&ff, &mut tmp);
+                for e in 0..d {
+                    x[t * d + e] += tmp[e];
+                }
+            }
+        }
+
+        let mut policy_logits = [0.0f32; POLICY_OUT];
+        let mut belief_logits = vec![0.0f32; BELIEF_OUT];
+        let mut head_out = [0.0f32; BELIEF_CLASSES];
+        let mut value = 0.0f32;
+        for t in 0..TOKENS {
+            layer_norm(&x[t * d..(t + 1) * d], &self.fin_g, &self.fin_b, &mut ln);
+            if t == 0 {
+                let mut val = [0.0f32; 1];
+                self.value.apply(&ln, &mut val);
+                value = val[0];
+            } else {
+                let c = t - 1;
+                let mut logit = [0.0f32; 1];
+                self.policy.apply(&ln, &mut logit);
+                policy_logits[c] = logit[0];
+                self.belief.apply(&ln, &mut head_out);
+                belief_logits[c * BELIEF_CLASSES..(c + 1) * BELIEF_CLASSES]
+                    .copy_from_slice(&head_out);
+            }
+        }
+        NeuralOutput {
+            policy_logits,
+            value,
+            belief_logits,
+        }
     }
 }
 
@@ -269,6 +561,18 @@ fn layer_norm(x: &[f32], gamma: &[f32], beta: &[f32], out: &mut [f32]) {
     let inv = 1.0 / (var + LN_EPS).sqrt();
     for i in 0..x.len() {
         out[i] = (x[i] - mean) * inv * gamma[i] + beta[i];
+    }
+}
+
+fn softmax_inplace(x: &mut [f32]) {
+    let max = x.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    let mut sum = 0.0f32;
+    for v in x.iter_mut() {
+        *v = (*v - max).exp();
+        sum += *v;
+    }
+    for v in x.iter_mut() {
+        *v /= sum;
     }
 }
 
