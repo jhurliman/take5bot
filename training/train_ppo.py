@@ -349,7 +349,9 @@ def collect(
         for s, rid in slot.driver_rows.items():
             logits, value, _ = nets[s](obs_t[rid])
             dist = masked_categorical(logits, mask_t[rid])
-            act = dist.sample()
+            # Slot 3 is a frozen champion under exploitability probing:
+            # play argmax, exactly like the deployed raw policy.
+            act = dist.probs.argmax(dim=-1) if s >= 3 else dist.sample()
             actions[rid] = act
             if s == 0:
                 buf["obs"][t] = obs_t[rid]
@@ -451,6 +453,14 @@ def main() -> int:
         "(66 = real rules), with a zero-sum win bonus at match end",
     )
     parser.add_argument(
+        "--opponent-ckpt",
+        default=None,
+        help="torch checkpoint (any arch) driven as frozen opponent seats "
+        "on the GPU — much faster than engine-bot opponents when the "
+        "champion is an attention net; with --exploit it replaces the "
+        "engine-bot champion seats",
+    )
+    parser.add_argument(
         "--exploit",
         action="store_true",
         help="train a pure best-response to --opponent-net (exploitability probe)",
@@ -501,7 +511,21 @@ def main() -> int:
         EnvSlot(n, [None] * 4, [0, 0, 1, 1], args.seed + 5, device, args.match_to),
         EnvSlot(n, [None] * 4, [0, 2, 2, 2], args.seed + 6, device, args.match_to),
     ]
-    if args.opponent_net:
+    if args.opponent_ckpt and args.exploit:
+        # Champion seats driven by the frozen torch net (driver slot 3):
+        # batched on the GPU, argmax like the deployed policy.
+        pool = [
+            EnvSlot(
+                n,
+                [None] * 4,
+                [0, 3, 3, 3],
+                args.seed + 7 + i,
+                device,
+                args.match_to,
+            )
+            for i in range(3)
+        ]
+    elif args.opponent_net:
         champ = f"neural:{args.opponent_net}:{args.opponent_worlds}"
         if args.exploit:
             # Best-response mode: a single learner seat, every opponent the
@@ -547,6 +571,16 @@ def main() -> int:
         for _ in range(2)
     ]
     nets = [learner, *frozen]
+    if args.opponent_ckpt:
+        ckpt = torch.load(args.opponent_ckpt, map_location=device, weights_only=False)
+        cfg = ckpt.get("config", {})
+        champ_net = build_net(
+            cfg.get("arch", "mlp"), cfg.get("width", 512), cfg.get("blocks", 2)
+        ).to(device)
+        champ_net.load_state_dict(ckpt["model"], strict=False)
+        champ_net.eval().requires_grad_(False)
+        nets.append(champ_net)
+        print(f"champion seats driven by {args.opponent_ckpt} ({cfg.get('arch')})")
     opt = torch.optim.Adam(learner.parameters(), lr=args.lr)
     league: list[dict] = []
     start_iter = 0
