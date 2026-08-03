@@ -192,7 +192,11 @@ the champion brain covers both site roles: Neural opponents play the
 M11 raw policy, and the coach runs the same net's belief-guided
 analyze (worlds=4 — bull-unit scores, which the "+n bulls" badges
 need) in a web worker (~1 s per hand, off the main thread). The old
-MLP net is no longer shipped to the site.
+MLP net is no longer shipped to the site. Search on top of M11 was
+measured and rejected: worlds=4 loses to the raw policy head-to-head
+(48.4%, 700 games) — the finetuned transformer has internalized what
+shallow determinized search offers, so the deployed raw policy is the
+strongest configuration, not a latency compromise.
 
 The M9 capacity conclusion stands refined: more MLP capacity was not
 the lever, but architecture was — and it was only reachable through
