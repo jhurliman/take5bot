@@ -51,6 +51,43 @@ export class EngineBot {
         return v7;
     }
     /**
+     * Coach mode for a forced row choice: score every row (higher =
+     * better, bull units). Returns a flat Float32Array of
+     * (row_index, score) pairs. Neural bots only.
+     * @param {number} player
+     * @param {number} num_players
+     * @param {Uint8Array} hand
+     * @param {Uint8Array} rows_flat
+     * @param {Uint8Array} row_lens
+     * @param {Uint16Array} penalties
+     * @param {Uint16Array} totals
+     * @param {Uint8Array} played
+     * @param {number} turn
+     * @param {number} forced
+     * @returns {Float32Array}
+     */
+    analyze_rows(player, num_players, hand, rows_flat, row_lens, penalties, totals, played, turn, forced) {
+        const ptr0 = passArray8ToWasm0(hand, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray8ToWasm0(rows_flat, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passArray8ToWasm0(row_lens, wasm.__wbindgen_malloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ptr3 = passArray16ToWasm0(penalties, wasm.__wbindgen_malloc);
+        const len3 = WASM_VECTOR_LEN;
+        const ptr4 = passArray16ToWasm0(totals, wasm.__wbindgen_malloc);
+        const len4 = WASM_VECTOR_LEN;
+        const ptr5 = passArray8ToWasm0(played, wasm.__wbindgen_malloc);
+        const len5 = WASM_VECTOR_LEN;
+        const ret = wasm.enginebot_analyze_rows(this.__wbg_ptr, player, num_players, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, turn, forced);
+        if (ret[3]) {
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        var v7 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v7;
+    }
+    /**
      * Pick a card to play from `hand`, given everything this seat can see.
      * `played` must contain every publicly revealed card (all cards
      * currently in rows plus every card in any penalty pile).

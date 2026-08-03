@@ -253,6 +253,7 @@ export default function Take5App() {
   const [botsLoading, setBotsLoading] = useState(false);
   const [coach, setCoach] = useState(false);
   const [coachHints, setCoachHints] = useState<Map<number, number> | null>(null);
+  const [rowHints, setRowHints] = useState<Map<number, number> | null>(null);
   const [coachThinking, setCoachThinking] = useState(false);
   const engineBots = useRef<Map<PlayerId, EngineBot>>(new Map());
   const coachBot = useRef<Coach | null>(null);
@@ -326,6 +327,33 @@ export default function Take5App() {
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [coach, state.phase, state.turn]);
+
+  // Coach mode, forced row choice: score the four rows with the same
+  // brain (immediate bulls + value of the position after the row
+  // restarts with your card).
+  useEffect(() => {
+    if (!coach || state.phase !== "needRowChoice" || state.needRowChoiceFor !== 0) {
+      setRowHints(null);
+      return;
+    }
+    const step = state.pendingPlacements[0];
+    if (!step || step.pid !== 0) return;
+    let cancelled = false;
+    (async () => {
+      setCoachThinking(true);
+      try {
+        coachBot.current ??= await Coach.create(Math.floor(Math.random() * 1e9));
+        const scores = await coachBot.current.analyzeRows(seatView(state, 0), step.card.id);
+        if (!cancelled) setRowHints(scores);
+      } catch (e) {
+        console.error("row coach failed", e);
+      } finally {
+        if (!cancelled) setCoachThinking(false);
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [coach, state.phase]);
 
   // --- Actions ---
   function onChooseCard(card: Card) {
@@ -583,7 +611,7 @@ export default function Take5App() {
       {/* Row choice modal */}
       <AnimatePresence>
         {state.phase === "needRowChoice" && state.needRowChoiceFor === 0 && (
-          <RowChoice rows={state.rows} onPick={onChooseRow} />
+          <RowChoice rows={state.rows} onPick={onChooseRow} hints={coach ? rowHints : null} thinking={coachThinking} />
         )}
       </AnimatePresence>
 
@@ -851,26 +879,53 @@ function themeForCard(n: number) {
   };
 }
 
-function RowChoice({ rows, onPick }:{ rows:[Row,Row,Row,Row]; onPick:(idx:number)=>void }) {
+function RowChoice({ rows, onPick, hints, thinking }:{
+  rows:[Row,Row,Row,Row]; onPick:(idx:number)=>void;
+  hints?:Map<number, number> | null; thinking?:boolean;
+}) {
+  // Same coach semantics as the hand: ★ marks the pick, +n the extra
+  // bulls a row is expected to cost compared with it.
+  const best = hints && hints.size ? Math.max(...hints.values()) : null;
   return (
     <motion.div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-30 flex items-center justify-center p-4"
       initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}}>
       <motion.div initial={{scale:0.95,opacity:0}} animate={{scale:1,opacity:1}} exit={{scale:0.95,opacity:0}}
         className="bg-slate-900 rounded-2xl shadow-2xl max-w-3xl w-full p-4">
-        <div className="text-sm text-slate-300 mb-3">Your card is lower than all rows. Choose a row to take:</div>
+        <div className="text-sm text-slate-300 mb-3">
+          Your card is lower than all rows. Choose a row to take:
+          {thinking && best === null && (<span className="ml-2 text-amber-400">coach thinking…</span>)}
+          {best !== null && (<span className="ml-2 text-amber-400">coach: ★ = best row · +n = extra bulls it risks</span>)}
+        </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {[0,1,2,3].map(i => (
-            <button key={i} onClick={() => onPick(i)}
-              className="text-left bg-slate-800 hover:bg-slate-700 rounded-xl p-3">
-              <div className="flex items-center justify-between text-xs text-slate-300 mb-2">
-                <span>Row {i+1}</span>
-                <span>{sumBulls(rows[i])}⟁</span>
-              </div>
-              <div className="flex gap-2 overflow-x-auto">
-                {rows[i].map(c => <CardView key={c.id} card={c} small />)}
-              </div>
-            </button>
-          ))}
+          {[0,1,2,3].map(i => {
+            const score = hints?.get(i);
+            const cost = best !== null && score !== undefined ? best - score : null;
+            const isBest = cost !== null && cost < 1e-6;
+            const costClass =
+              cost === null || isBest
+                ? "bg-amber-500 text-slate-950"
+                : cost < 1
+                  ? "bg-emerald-700 text-emerald-100"
+                  : cost < 3
+                    ? "bg-amber-700 text-amber-100"
+                    : "bg-red-700 text-red-100";
+            return (
+              <button key={i} onClick={() => onPick(i)}
+                className={`text-left bg-slate-800 hover:bg-slate-700 rounded-xl p-3 ${isBest ? "ring-2 ring-amber-500" : ""}`}>
+                <div className="flex items-center justify-between text-xs text-slate-300 mb-2">
+                  <span>Row {i+1}{cost !== null && (
+                    <span className={`ml-2 px-1.5 py-0.5 rounded-full text-[10px] ${costClass}`}>
+                      {isBest ? "★" : `+${cost.toFixed(1)}`}
+                    </span>
+                  )}</span>
+                  <span>{sumBulls(rows[i])}⟁</span>
+                </div>
+                <div className="flex gap-2 overflow-x-auto">
+                  {rows[i].map(c => <CardView key={c.id} card={c} small />)}
+                </div>
+              </button>
+            );
+          })}
         </div>
       </motion.div>
     </motion.div>

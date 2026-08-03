@@ -121,6 +121,16 @@ export class Coach {
     });
   }
 
+  /** Score the four rows for a forced row choice (bull units, higher =
+   * better). Keys of the returned map are row indices 0-3. */
+  analyzeRows(view: SeatView, forced: number): Promise<Map<number, number>> {
+    const id = this.nextId++;
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.worker.postMessage({ type: "analyzeRows", id, forced, ...flatView(view) });
+    });
+  }
+
   dispose(): void {
     this.worker.terminate();
     for (const req of this.pending.values()) {
