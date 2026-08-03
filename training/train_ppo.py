@@ -187,6 +187,7 @@ class EnvSlot:
     ):
         self.env = take5_engine.VecGames(num_games, specs, seed, match_to)
         self.num_games = num_games
+        self.match_to = match_to
         self.driver_slots = driver_slots
         k = len(driver_slots)
         assert k == len(self.env.policy_seats())
@@ -248,23 +249,46 @@ def collect(
                 buf["val"][t] = value
                 buf["belief"][t] = belief_t[rid]
 
-        rewards, dones, _, _, _ = slot.env.step(
+        rewards, dones, _, match_dones, _ = slot.env.step(
             (actions.cpu().numpy() + 1).astype(np.int64)
         )
         buf["rew"][t] = torch.as_tensor(rewards, device=device)[slot.train_rows]
     assert dones.all(), "deals must finish in exactly TURNS steps"
+
+    if slot.match_to > 0:
+        # A deal boundary is not match-terminal: the env has already dealt
+        # the next deal with standings carried, so bootstrap its value,
+        # zeroed only where the match actually ended.
+        obs, _ = slot.env.observe()
+        obs_t = torch.as_tensor(obs, device=device).view(rows, OBS_LEN)
+        _, boot, _ = nets[0](obs_t[slot.train_rows])
+        k = len(slot.driver_slots)
+        cont = 1.0 - torch.as_tensor(
+            match_dones.astype(np.float32), device=device
+        ).repeat_interleave(k)
+        buf["boot"] = boot * cont[slot.train_rows]
+    else:
+        buf["boot"] = torch.zeros(t_rows, device=device)
     return buf
 
 
 def gae(
-    rewards: torch.Tensor, values: torch.Tensor, lam: float
+    rewards: torch.Tensor,
+    values: torch.Tensor,
+    lam: float,
+    boot: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Gamma=1 GAE over a rectangular rollout that terminates at the end."""
+    """Gamma=1 GAE over a rectangular rollout.
+
+    `boot` is the value after the final turn — zero for terminal deals,
+    the fresh-deal value for nonterminal match-mode deal boundaries.
+    """
     turns = rewards.shape[0]
     adv = torch.zeros_like(rewards)
     running = torch.zeros_like(rewards[0])
+    last = boot if boot is not None else torch.zeros_like(values[0])
     for t in reversed(range(turns)):
-        next_val = values[t + 1] if t + 1 < turns else torch.zeros_like(values[0])
+        next_val = values[t + 1] if t + 1 < turns else last
         delta = rewards[t] + next_val - values[t]
         running = delta + lam * running
         adv[t] = running
@@ -360,33 +384,20 @@ def main() -> int:
     if args.opponent_net:
         champ = f"neural:{args.opponent_net}:{args.opponent_worlds}"
         if args.exploit:
-            # Best-response mode: every opponent is the frozen champion.
+            # Best-response mode: a single learner seat, every opponent the
+            # frozen champion — never two learner seats in one game, which
+            # would dilute the best response and understate exploitability.
             # The learner's win rate above parity measures exploitability.
             pool = [
                 EnvSlot(
                     n,
                     [None, champ, champ, champ],
                     [0],
-                    args.seed + 7,
+                    args.seed + 7 + i,
                     device,
                     args.match_to,
-                ),
-                EnvSlot(
-                    n,
-                    [None, champ, champ, champ],
-                    [0],
-                    args.seed + 8,
-                    device,
-                    args.match_to,
-                ),
-                EnvSlot(
-                    n,
-                    [None, None, champ, champ],
-                    [0, 0],
-                    args.seed + 9,
-                    device,
-                    args.match_to,
-                ),
+                )
+                for i in range(3)
             ]
         else:
             pool.append(
@@ -485,7 +496,8 @@ def main() -> int:
         rets: list[torch.Tensor] = []
         for slot in pool:
             roll = collect(slot, nets, device)
-            adv, ret = gae(roll["rew"], roll["val"], args.gae_lambda)
+            boot = roll.pop("boot")
+            adv, ret = gae(roll["rew"], roll["val"], args.gae_lambda, boot)
             t_rows = roll["rew"].shape[1]
             for key, v in roll.items():
                 flats.setdefault(key, []).append(
@@ -577,6 +589,31 @@ def main() -> int:
                 f"  | vs mc:16 {mc['policy_pen']:.2f}/{mc['opp_pen']:.2f} "
                 f"win {mc['win_rate']:.1%}"
             )
+            match_stats: dict[str, float] = {}
+            if args.match_to:
+                # A standings-aware policy may trade deal score for match
+                # wins, so match mode gates best.pt on the match metric.
+                match_opps = (
+                    [f"neural:{args.opponent_net}:0"] * 3
+                    if args.opponent_net
+                    else ["greedy"] * 3
+                )
+                match_stats = eval_match(
+                    learner,
+                    match_opps,
+                    max(args.eval_games // 4, 200),
+                    30_000 + it,
+                    device,
+                    args.match_to,
+                )
+                line += (
+                    f"  | match win {match_stats['match_win']:.1%} "
+                    f"tot {match_stats['policy_total']:.1f}"
+                    f"/{match_stats['opp_total']:.1f}"
+                )
+                score = -match_stats["match_win"]
+            else:
+                score = greedy["policy_pen"]
             if run:
                 run.log(
                     {
@@ -584,10 +621,11 @@ def main() -> int:
                         **stats,
                         **{f"greedy/{k}": v for k, v in greedy.items()},
                         **{f"mc16/{k}": v for k, v in mc.items()},
+                        **{f"match/{k}": v for k, v in match_stats.items()},
                     }
                 )
-            if greedy["policy_pen"] < best_pen:
-                best_pen = greedy["policy_pen"]
+            if score < best_pen:
+                best_pen = score
                 save(os.path.join(args.out, "best.pt"), it)
                 line += "  [best]"
             save(os.path.join(args.out, "last.pt"), it)

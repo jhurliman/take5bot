@@ -104,7 +104,10 @@ Exploitability: a best-response net warm-started from the M7 champion and
 trained 1000 iters purely against it reaches only 26.2% win vs 3 raw-M7
 seats (25% = parity, 3000 games) and loses to the search champion (18.2%)
 — near-unexploitable within this model class, corroborating the flattening
-self-play curves. Match awareness: obs v3 appends carried standings
+self-play curves. (Caveat: that probe's rollout pool gave the learner two
+seats in a third of its games, diluting the best response and possibly
+understating exploitability; --exploit now uses a single learner seat in
+every game, and the probe re-run is tracked under M11.) Match awareness: obs v3 appends carried standings
 (append-only; old nets read their prefix), VecGames match mode plays deals
 to 66 with a zero-sum outcome bonus, and the M8 generation trained with
 --match-to 66 wins 28.1% of matches vs standings-blind M7 seats (26.3%
@@ -117,12 +120,39 @@ A 1024-wide, 3-block net (4.5x parameters) trained from scratch under the
 full modern curriculum (match mode, M8 champion anchor, league) loses to
 the 512x2 champion head-to-head with search: 41.1% after 3000 iters, still
 42.9% after 6000 (~ the small-net lineage's cumulative budget). Its
-vs-greedy eval never reached the lineage's level. Conclusion: at this
-game's complexity the small net is not capacity-limited — strength lives
-in the accumulated curriculum, and the exploiter probe already showed the
-champion near-unexploitable. Attention/transformer encoders remain
-untested (expensive to port to the Rust/WASM inference path) but the
-near-unexploitability result bounds their possible gain tightly.
+vs-greedy eval never reached the lineage's level. What this shows: under a
+matched curriculum-and-iteration budget, extra MLP capacity alone is not
+the lever — the champion's strength lives in the accumulated multi-
+generation curriculum. What it does not show: a hard capacity ceiling.
+The big net trained from scratch while the champion is the product of
+warm-started generations, so a capacity gain via a better-controlled
+protocol (e.g. distill champion -> big net, then continue training)
+remains possible but unmotivated while the exploiter probe finds so
+little to exploit. Note the probe's 26.2% bound is in-class (its best
+response is another instance of the same MLP family); architectures
+outside that class — attention/transformer encoders — are not bounded by
+it and are tested separately (M11 below).
+
+## Match-credit fixes and out-of-class probes (M11)
+
+Review feedback on the M8 trainer surfaced three real issues, fixed here:
+
+1. Match mode treated every deal boundary as terminal: `collect` discarded
+   `match_dones` and GAE bootstrapped zero after turn 10, so actions in
+   earlier deals earned no credit for the eventual match outcome and the
+   value head trained on truncated returns. GAE now bootstraps the value
+   of the fresh deal the env has already dealt (standings carried), zeroed
+   only where the match actually ended.
+2. `--exploit` gave the learner two seats in a third of its games. The
+   pool is now strictly one learner seat vs three frozen champion seats.
+3. `best.pt` was selected on per-deal greedy penalty even in match mode;
+   match-mode runs now gate on `eval_match` win rate against the anchor.
+
+Experiments running on top of these fixes: an M10 retrain of the champion
+architecture with corrected match credit, a corrected-seating exploiter
+re-run (clean in-class exploitability number), and an attention-encoder
+experiment — an out-of-class architecture that the in-class
+exploitability bound cannot cover. Results will be recorded here.
 
 ## Legacy comparison
 
