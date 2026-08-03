@@ -209,6 +209,52 @@ impl EngineBot {
         }
         Ok(out)
     }
+
+    /// Coach mode for a forced row choice: score every row (higher =
+    /// better, bull units). Returns a flat Float32Array of
+    /// (row_index, score) pairs. Neural bots only.
+    #[allow(clippy::too_many_arguments)]
+    pub fn analyze_rows(
+        &mut self,
+        player: u8,
+        num_players: u8,
+        hand: &[u8],
+        rows_flat: &[u8],
+        row_lens: &[u8],
+        penalties: &[u16],
+        totals: &[u16],
+        played: &[u8],
+        turn: u8,
+        forced: u8,
+    ) -> Result<Vec<f32>, JsError> {
+        let Inner::Neural(bot) = &mut self.inner else {
+            return Err(JsError::new("analyze_rows requires a neural bot"));
+        };
+        if !(1..=104).contains(&forced) {
+            return Err(JsError::new("invalid forced card"));
+        }
+        let rows = to_rows(rows_flat, row_lens)?;
+        if totals.len() != penalties.len() || penalties.len() != num_players as usize {
+            return Err(JsError::new("bad penalties/totals"));
+        }
+        let view = View {
+            player,
+            num_players,
+            hand: to_set(hand)?,
+            totals,
+            played: to_set(played)?,
+            rows: &rows,
+            penalties,
+            turn,
+        };
+        let scored = bot.analyze_rows(&view, forced);
+        let mut out = Vec::with_capacity(scored.len() * 2);
+        for (row, score) in scored {
+            out.push(row as f32);
+            out.push(score as f32);
+        }
+        Ok(out)
+    }
 }
 
 /// Bullhead value of a card (parity helper for the TS side).

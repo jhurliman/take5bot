@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use crate::cards::{bullheads, set_insert, set_iter, set_len, Card, CardSet};
+use crate::cards::{bullheads, set_insert, set_iter, set_len, set_remove, Card, CardSet};
 use crate::game::{Game, Phase, View, MAX_ROW_LEN, ROWS};
 use crate::neural::{NeuralNet, BELIEF_CLASSES};
 use crate::obs::{encode_view, OBS_LEN};
@@ -470,6 +470,40 @@ impl NeuralSearchBot {
         candidates
             .into_iter()
             .zip(totals.into_iter().map(|t| t / self.worlds as f64))
+            .collect()
+    }
+
+    /// Score every row for a forced row choice (the played card is below
+    /// all row ends): immediate bulls taken plus the value head's estimate
+    /// of the position after that row restarts with the forced card.
+    /// Higher is better; units match `analyze` (relative bulls). Also
+    /// powers the web UI's coach mode.
+    pub fn analyze_rows(&mut self, view: &View, forced: Card) -> Vec<(usize, f64)> {
+        let me = view.player as usize;
+        let mut hand = view.hand;
+        set_remove(&mut hand, forced); // defensive: UI may still list it
+        let mut obs = vec![0.0f32; OBS_LEN];
+        (0..ROWS)
+            .map(|r| {
+                let bulls = row_bulls(&view.rows[r]);
+                let mut rows: [Vec<Card>; ROWS] = view.rows.clone();
+                rows[r] = vec![forced];
+                let mut penalties = view.penalties.to_vec();
+                penalties[me] += bulls;
+                let after = View {
+                    player: view.player,
+                    num_players: view.num_players,
+                    hand,
+                    rows: &rows,
+                    penalties: &penalties,
+                    totals: view.totals,
+                    played: view.played,
+                    turn: view.turn,
+                };
+                encode_view(&after, None, &mut obs);
+                let value = self.net.forward(&obs).value as f64;
+                (r, value - bulls as f64)
+            })
             .collect()
     }
 }

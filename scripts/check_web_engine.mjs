@@ -55,4 +55,31 @@ if (
   console.error(`web engine check FAILED: bad coach scores`, [...scores]);
   process.exit(1);
 }
-console.log("web engine check OK: committed pkg + net-attn.t5n play and analyze correctly");
+// Row-choice coach path: playing the 3 (below every row end) forces a
+// row choice; all four rows must get finite scores and the cheap
+// single-card rows must beat taking the 5-card row 3.
+const rowCoach = new pkg.EngineBot("neural:4", weights, 1n);
+const rowsFlat = rowCoach.analyze_rows(
+  0,
+  4,
+  Uint8Array.from([3, 90]),
+  Uint8Array.from(rows.flat()),
+  Uint8Array.from(rows.map((r) => r.length)),
+  Uint16Array.from([0, 0, 0, 0]),
+  Uint16Array.from([12, 40, 7, 63]),
+  Uint8Array.from(rows.flat()),
+  8,
+  3,
+);
+rowCoach.free();
+const rowScores = new Map();
+for (let i = 0; i < rowsFlat.length; i += 2) rowScores.set(rowsFlat[i], rowsFlat[i + 1]);
+if (
+  rowScores.size !== 4 ||
+  ![...rowScores.values()].every(Number.isFinite) ||
+  !(rowScores.get(0) > rowScores.get(2))
+) {
+  console.error(`web engine check FAILED: bad row scores`, [...rowScores]);
+  process.exit(1);
+}
+console.log("web engine check OK: committed pkg + net-attn.t5n play, analyze, and row-coach correctly");

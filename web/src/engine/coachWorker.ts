@@ -13,8 +13,9 @@ interface InitMsg {
 }
 
 interface AnalyzeMsg {
-  type: "analyze";
+  type: "analyze" | "analyzeRows";
   id: number;
+  forced?: number;
   player: number;
   numPlayers: number;
   hand: Uint8Array;
@@ -47,17 +48,31 @@ self.onmessage = async (e: MessageEvent<InitMsg | AnalyzeMsg>) => {
   try {
     await ready;
     if (!bot) throw new Error("coach worker not initialized");
-    const flat = bot.analyze(
-      msg.player,
-      msg.numPlayers,
-      msg.hand,
-      msg.rowsFlat,
-      msg.rowLens,
-      msg.penalties,
-      msg.totals,
-      msg.played,
-      msg.turn,
-    );
+    const flat =
+      msg.type === "analyzeRows"
+        ? bot.analyze_rows(
+            msg.player,
+            msg.numPlayers,
+            msg.hand,
+            msg.rowsFlat,
+            msg.rowLens,
+            msg.penalties,
+            msg.totals,
+            msg.played,
+            msg.turn,
+            msg.forced!,
+          )
+        : bot.analyze(
+            msg.player,
+            msg.numPlayers,
+            msg.hand,
+            msg.rowsFlat,
+            msg.rowLens,
+            msg.penalties,
+            msg.totals,
+            msg.played,
+            msg.turn,
+          );
     self.postMessage({ type: "result", id: msg.id, scores: flat });
   } catch (err) {
     self.postMessage({ type: "error", id: msg.id, message: String(err) });
