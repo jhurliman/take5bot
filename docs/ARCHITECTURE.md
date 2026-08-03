@@ -148,11 +148,69 @@ Review feedback on the M8 trainer surfaced three real issues, fixed here:
 3. `best.pt` was selected on per-deal greedy penalty even in match mode;
    match-mode runs now gate on `eval_match` win rate against the anchor.
 
-Experiments running on top of these fixes: an M10 retrain of the champion
-architecture with corrected match credit, a corrected-seating exploiter
-re-run (clean in-class exploitability number), and an attention-encoder
-experiment — an out-of-class architecture that the in-class
-exploitability bound cannot cover. Results will be recorded here.
+**M10 (control): match-credit fix alone doesn't gate.** The champion
+512x2 MLP warm-started from M8 and retrained 2000 iters with corrected
+match credit is a coin flip against M8 in search h2h (50.2%, 2000 games)
+and only +0.7 above self-calibration in match win (25.2% vs 24.5%, 5000
+matches). M8 stayed champion — until M11.
+
+**M11: the attention encoder is a real, decisive win.** Architecture:
+one token per card (in-hand, played, bulls, value, on-table, row, slot,
+is-row-tail + learned card embedding), a CLS token carrying the non-card
+observation tail, pre-LN transformer (d192, 4 layers, 6 heads, 1.8M
+params — same scale as the champion MLP), per-card-token policy logits,
+CLS value, per-token belief. Three findings, in order:
+
+1. *From-scratch PPO cannot train it.* Two independent runs (lr 3e-4;
+   final-LayerNorm + lr 1e-4) both plateau at greedy-inferior play
+   (~14 bulls vs greedy) for 1500-2000 iters while the belief head
+   converges normally — the encoder learns the game's information
+   structure but PPO never finds a strong policy.
+2. *The architecture represents champion play easily.* Supervised
+   distillation of M8 (training/distill.py: soft CE on legal-card
+   distribution + value MSE + belief CE) reaches champion-level raw
+   play in ~100 iters and exact parity vs raw M8 (24.6% with 25% =
+   parity, 4000 deals / 2000 matches). The from-scratch failure is an
+   optimization pathology, not a capacity or expressiveness limit.
+3. *Distill-then-finetune breaks the MLP ceiling.* PPO finetuning the
+   distilled student (lr 3e-5, clip 0.1 — at lr 1e-4 PPO destroys the
+   distilled policy within 250 iters; the MLP tolerates 3e-4) under the
+   match-mode champion-anchored curriculum climbs monotonically for
+   3000 iters. Final gates: 28.8% deal win vs 3x raw M8 (4000 deals,
+   25% = parity); 35.0% match win vs 24.5% self-calibration (5000
+   matches, ~15 sigma); and it beats even M8's *search* mode — 26.3%
+   deal win / 29.2% match win vs 3 seats of neural:16, and 54.8% h2h
+   (700 games) in the Rust engine 2v2 ladder (~ +67 Elo) — with zero
+   search of its own.
+
+Deployment: "T5N3" weight format (attention tensors + heads count),
+pure-Rust transformer forward in neural.rs (card features rebuilt from
+the observation, parity-tested against torch on real states, f32+f16).
+A hand-written simd128 dot kernel (wasm32-only; native autovectorizes)
+makes the 400 MFLOP forward 4.3x faster in WASM (~15-35 ms/move), so
+the champion brain covers both site roles: Neural opponents play the
+M11 raw policy, and the coach runs the same net's belief-guided
+analyze (worlds=4 — bull-unit scores, which the "+n bulls" badges
+need) in a web worker (~1 s per hand, off the main thread). The old
+MLP net is no longer shipped to the site.
+
+The M9 capacity conclusion stands refined: more MLP capacity was not
+the lever, but architecture was — and it was only reachable through
+distillation, since direct PPO fails on the transformer at every
+learning rate tried. The in-class exploitability probe (26.2%) indeed
+did not bound the out-of-class gain, exactly as the review cautioned.
+
+**Exploitability of the new champion** (corrected single-learner-seat
+pools; champion seats driven by the frozen torch net at argmax via
+--opponent-ckpt, since engine-bot attention opponents throttle rollouts
+~150x): an MLP best-response warm-started from M10 and trained 1000
+iters purely against M11 finishes *below* parity — 20.6% win vs 3 raw
+M11 seats (3000 deals, 25% = parity) — the entire MLP class cannot even
+draw with the transformer. A same-class attention best-response
+warm-started from M11 itself reaches 25.9%, within noise of parity:
+M11 is near-unexploitable in its own class. With the champion strictly
+dominating the old class and measuring clean on the corrected probe,
+the strength program closes again at this scale — one tier higher.
 
 ## Legacy comparison
 

@@ -17,11 +17,9 @@ pkg.initSync({
   module: readFileSync(join(root, "web/src/engine/pkg/take5_wasm_bg.wasm")),
 });
 
-const weights = readFileSync(join(root, "web/public/net.t5n"));
-const bot = new pkg.EngineBot("neural:8", weights, 1n);
-
 const rows = [[4], [15], [20, 25, 30, 31, 35], [80]];
-const card = bot.choose_card(
+const weights = readFileSync(join(root, "web/public/net-attn.t5n"));
+const viewArgs = [
   0,
   4,
   Uint8Array.from([36, 90]),
@@ -31,11 +29,30 @@ const card = bot.choose_card(
   Uint16Array.from([12, 40, 7, 63]), // carried match totals (standings-aware bot)
   Uint8Array.from(rows.flat()),
   8,
-);
-bot.free();
+];
 
+// Opponent path: the champion transformer's raw policy.
+const bot = new pkg.EngineBot("neural:0", weights, 1n);
+const card = bot.choose_card(...viewArgs);
+bot.free();
 if (card !== 90) {
   console.error(`web engine check FAILED: expected card 90, got ${card}`);
   process.exit(1);
 }
-console.log("web engine check OK: committed pkg + net.t5n load and play correctly");
+
+// Coach path: same net, belief-guided analyze (worlds > 0) — must score
+// every hand card with finite bull-unit values and rank 90 above 36.
+const coach = new pkg.EngineBot("neural:4", weights, 1n);
+const flat = coach.analyze(...viewArgs);
+coach.free();
+const scores = new Map();
+for (let i = 0; i < flat.length; i += 2) scores.set(flat[i], flat[i + 1]);
+if (
+  scores.size !== 2 ||
+  ![...scores.values()].every(Number.isFinite) ||
+  !(scores.get(90) > scores.get(36))
+) {
+  console.error(`web engine check FAILED: bad coach scores`, [...scores]);
+  process.exit(1);
+}
+console.log("web engine check OK: committed pkg + net-attn.t5n play and analyze correctly");

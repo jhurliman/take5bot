@@ -78,6 +78,116 @@ class PolicyNet(nn.Module):
         return self.policy(h), self.value(h).squeeze(-1), belief
 
 
+def bullheads(card: int) -> int:
+    if card == 55:
+        return 7
+    if card % 11 == 0:
+        return 5
+    if card % 10 == 0:
+        return 3
+    if card % 5 == 0:
+        return 2
+    return 1
+
+
+class AttnNet(nn.Module):
+    """Card-token transformer encoder (out-of-class probe vs the MLP).
+
+    One token per card carrying [in-hand, played, bulls, value, on-table,
+    row, slot, is-row-tail] plus a learned card embedding, and one CLS
+    token fed the non-card observation tail (row summaries, penalties,
+    seats, scalars, standings). Policy logits read per-card tokens (a
+    natural fit for the 104-card action space), value reads CLS, belief
+    reads per-card tokens.
+    """
+
+    CARD_FEATS = 8
+    GLOBAL_OFF = 2 * NUM_CARDS  # everything past the two card masks
+
+    def __init__(self, d_model: int = 192, layers: int = 4):
+        super().__init__()
+        self.width = d_model
+        self.blocks = layers
+        self.card_emb = nn.Embedding(NUM_CARDS, d_model)
+        self.feat = nn.Linear(self.CARD_FEATS, d_model)
+        self.glob = nn.Linear(OBS_LEN - self.GLOBAL_OFF, d_model)
+        self.cls = nn.Parameter(torch.zeros(1, 1, d_model))
+        layer = nn.TransformerEncoderLayer(
+            d_model,
+            nhead=max(d_model // 32, 1),
+            dim_feedforward=4 * d_model,
+            dropout=0.0,
+            batch_first=True,
+            norm_first=True,
+        )
+        # Pre-LN encoders need a final norm (PyTorch omits it by default).
+        self.encoder = nn.TransformerEncoder(layer, layers, norm=nn.LayerNorm(d_model))
+        self.policy = nn.Linear(d_model, 1)
+        self.value = nn.Linear(d_model, 1)
+        self.belief = nn.Linear(d_model, BELIEF_CLASSES)
+        self.register_buffer(
+            "bulls",
+            torch.tensor([bullheads(c) for c in range(1, NUM_CARDS + 1)]) / 7.0,
+        )
+        self.register_buffer(
+            "card_val", torch.arange(1, NUM_CARDS + 1, dtype=torch.float32) / NUM_CARDS
+        )
+        slot = torch.arange(20)
+        self.register_buffer("slot_row", (slot // 5).float() / 3.0)
+        self.register_buffer("slot_pos", (slot % 5).float() / 4.0)
+        self.register_buffer("slot_row_idx", slot // 5)
+
+    def _card_features(self, obs: torch.Tensor) -> torch.Tensor:
+        # Sync-free on purpose: no data-dependent boolean indexing, only
+        # scatter/gather (empty slots scatter into a discarded 0th row).
+        b_sz = obs.shape[0]
+        f = torch.zeros(b_sz, NUM_CARDS, self.CARD_FEATS, device=obs.device)
+        f[:, :, 0] = obs[:, :NUM_CARDS]
+        f[:, :, 1] = obs[:, NUM_CARDS : 2 * NUM_CARDS]
+        f[:, :, 2] = self.bulls
+        f[:, :, 3] = self.card_val
+        # Table membership from the 4x5 row slots (normalized card ids).
+        ids = torch.round(obs[:, self.GLOBAL_OFF : self.GLOBAL_OFF + 20] * NUM_CARDS)
+        ids = ids.long()
+        valid = (ids > 0).float()
+        row_len = valid.view(b_sz, 4, 5).sum(-1)
+        len_at_slot = row_len.gather(1, self.slot_row_idx.expand(b_sz, -1))
+        tail = (self.slot_pos * 4.0 + 1.0 == len_at_slot).float() * valid
+        vals = torch.stack(
+            [
+                valid,
+                self.slot_row.expand_as(valid),
+                self.slot_pos.expand_as(valid),
+                tail,
+            ],
+            dim=-1,
+        )
+        scat = torch.zeros(b_sz, NUM_CARDS + 1, 4, device=obs.device)
+        scat.scatter_(1, ids.unsqueeze(-1).expand(-1, -1, 4), vals)
+        f[:, :, 4:] = scat[:, 1:]
+        return f
+
+    def forward(
+        self, obs: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        # bf16 autocast: fp32 attention activations at PPO batch sizes are
+        # multi-GB (105 tokens/sample); heads are cast back for loss math.
+        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=obs.is_cuda):
+            tok = self.feat(self._card_features(obs)) + self.card_emb.weight
+            cls = self.cls + self.glob(obs[:, self.GLOBAL_OFF :]).unsqueeze(1)
+            h = self.encoder(torch.cat([cls, tok], dim=1))
+            logits = self.policy(h[:, 1:]).squeeze(-1)
+            value = self.value(h[:, 0]).squeeze(-1)
+            belief = self.belief(h[:, 1:])
+        return logits.float(), value.float(), belief.float()
+
+
+def build_net(arch: str, width: int, blocks: int) -> nn.Module:
+    if arch == "attn":
+        return AttnNet(width, blocks)
+    return PolicyNet(width, blocks)
+
+
 def masked_categorical(
     logits: torch.Tensor, mask: torch.Tensor
 ) -> torch.distributions.Categorical:
@@ -88,7 +198,7 @@ def masked_categorical(
 
 @torch.no_grad()
 def eval_vs(
-    net: PolicyNet,
+    net: nn.Module,
     opponents: list[str],
     games: int,
     seed: int,
@@ -125,7 +235,7 @@ def eval_vs(
 
 @torch.no_grad()
 def eval_match(
-    net: PolicyNet,
+    net: nn.Module,
     opponents: list[str],
     matches: int,
     seed: int,
@@ -163,7 +273,7 @@ def eval_match(
             opp_total += float(totals[1:].mean())
     net.train()
     return {
-        "match_win": won / matches,
+        "match_win": float(won / matches),
         "policy_total": pol_total / matches,
         "opp_total": opp_total / matches,
     }
@@ -211,7 +321,7 @@ class EnvSlot:
 
 @torch.no_grad()
 def collect(
-    slot: EnvSlot, nets: list[PolicyNet], device: torch.device
+    slot: EnvSlot, nets: list[nn.Module], device: torch.device
 ) -> dict[str, torch.Tensor]:
     """Roll one full deal through `slot`; returns trainable-row buffers."""
     rows = slot.rows
@@ -239,7 +349,9 @@ def collect(
         for s, rid in slot.driver_rows.items():
             logits, value, _ = nets[s](obs_t[rid])
             dist = masked_categorical(logits, mask_t[rid])
-            act = dist.sample()
+            # Slot 3 is a frozen champion under exploitability probing:
+            # play argmax, exactly like the deployed raw policy.
+            act = dist.probs.argmax(dim=-1) if s >= 3 else dist.sample()
             actions[rid] = act
             if s == 0:
                 buf["obs"][t] = obs_t[rid]
@@ -307,6 +419,14 @@ def main() -> int:
     parser.add_argument("--gae-lambda", type=float, default=0.95)
     parser.add_argument("--ppo-epochs", type=int, default=3)
     parser.add_argument("--minibatch", type=int, default=8192)
+    parser.add_argument(
+        "--arch",
+        choices=["mlp", "attn"],
+        default="mlp",
+        help="mlp = residual MLP (exportable to the Rust/WASM engine); "
+        "attn = card-token transformer (torch-only experiment; --width is "
+        "d_model, try 192; --blocks is encoder layers, try 4)",
+    )
     parser.add_argument("--width", type=int, default=512)
     parser.add_argument("--blocks", type=int, default=2)
     parser.add_argument("--seed", type=int, default=0)
@@ -333,6 +453,14 @@ def main() -> int:
         "(66 = real rules), with a zero-sum win bonus at match end",
     )
     parser.add_argument(
+        "--opponent-ckpt",
+        default=None,
+        help="torch checkpoint (any arch) driven as frozen opponent seats "
+        "on the GPU — much faster than engine-bot opponents when the "
+        "champion is an attention net; with --exploit it replaces the "
+        "engine-bot champion seats",
+    )
+    parser.add_argument(
         "--exploit",
         action="store_true",
         help="train a pure best-response to --opponent-net (exploitability probe)",
@@ -353,6 +481,8 @@ def main() -> int:
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     random.seed(args.seed)
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
     device = torch.device(args.device)
     os.makedirs(args.out, exist_ok=True)
 
@@ -381,7 +511,21 @@ def main() -> int:
         EnvSlot(n, [None] * 4, [0, 0, 1, 1], args.seed + 5, device, args.match_to),
         EnvSlot(n, [None] * 4, [0, 2, 2, 2], args.seed + 6, device, args.match_to),
     ]
-    if args.opponent_net:
+    if args.opponent_ckpt and args.exploit:
+        # Champion seats driven by the frozen torch net (driver slot 3):
+        # batched on the GPU, argmax like the deployed policy.
+        pool = [
+            EnvSlot(
+                n,
+                [None] * 4,
+                [0, 3, 3, 3],
+                args.seed + 7 + i,
+                device,
+                args.match_to,
+            )
+            for i in range(3)
+        ]
+    elif args.opponent_net:
         champ = f"neural:{args.opponent_net}:{args.opponent_worlds}"
         if args.exploit:
             # Best-response mode: a single learner seat, every opponent the
@@ -421,12 +565,22 @@ def main() -> int:
                 )
             )
 
-    learner = PolicyNet(args.width, args.blocks).to(device)
+    learner = build_net(args.arch, args.width, args.blocks).to(device)
     frozen = [
-        PolicyNet(args.width, args.blocks).to(device).requires_grad_(False)
+        build_net(args.arch, args.width, args.blocks).to(device).requires_grad_(False)
         for _ in range(2)
     ]
     nets = [learner, *frozen]
+    if args.opponent_ckpt:
+        ckpt = torch.load(args.opponent_ckpt, map_location=device, weights_only=False)
+        cfg = ckpt.get("config", {})
+        champ_net = build_net(
+            cfg.get("arch", "mlp"), cfg.get("width", 512), cfg.get("blocks", 2)
+        ).to(device)
+        champ_net.load_state_dict(ckpt["model"], strict=False)
+        champ_net.eval().requires_grad_(False)
+        nets.append(champ_net)
+        print(f"champion seats driven by {args.opponent_ckpt} ({cfg.get('arch')})")
     opt = torch.optim.Adam(learner.parameters(), lr=args.lr)
     league: list[dict] = []
     start_iter = 0
@@ -472,6 +626,7 @@ def main() -> int:
                 "iter": iteration,
                 "best_pen": best_pen,
                 "config": {
+                    "arch": args.arch,
                     "width": args.width,
                     "blocks": args.blocks,
                     "belief_classes": BELIEF_CLASSES,

@@ -14,7 +14,7 @@ import torch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from train_ppo import PolicyNet, eval_vs
+from train_ppo import build_net, eval_vs
 
 
 def main() -> int:
@@ -33,7 +33,9 @@ def main() -> int:
     device = torch.device(args.device)
     ckpt = torch.load(args.ckpt, map_location=device, weights_only=True)
     cfg = ckpt.get("config", {})
-    net = PolicyNet(cfg.get("width", 512), cfg.get("blocks", 2)).to(device)
+    net = build_net(
+        cfg.get("arch", "mlp"), cfg.get("width", 512), cfg.get("blocks", 2)
+    ).to(device)
     net.load_state_dict(ckpt["model"], strict=False)
 
     opponents = args.opponents.split(",")
