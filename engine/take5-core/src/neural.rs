@@ -9,7 +9,9 @@
 //!   the observation, mirroring AttnNet._card_features) plus a CLS token,
 //!   pre-LN transformer encoder with a final LayerNorm, per-card-token
 //!   policy/belief heads and a CLS value head. ~400 MFLOPs per forward —
-//!   fine for raw-policy play, too slow to wrap in determinized search.
+//!   fine for raw-policy play and small-worlds analyze (the simd128 dot
+//!   kernel below makes it ~4x faster in WASM); large-worlds search is
+//!   still impractical at this size.
 //!
 //! Weights load from a flat little-endian blob written by
 //! `training/export_net.py` (format documented there and in `from_bytes`).

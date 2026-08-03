@@ -185,13 +185,14 @@ CLS value, per-token belief. Three findings, in order:
 
 Deployment: "T5N3" weight format (attention tensors + heads count),
 pure-Rust transformer forward in neural.rs (card features rebuilt from
-the observation, parity-tested against torch on real states, f32+f16),
-~67 ms/move raw-policy in WASM — the same latency as the MLP search bot,
-so the web app's Neural difficulty now plays the M11 transformer raw
-policy. The coach stays on the MLP+search net: its scores are in bull
-units (analyze() with worlds>0), which the "+n bulls" badges need;
-wrapping determinized search around the 400 MFLOP attention forward
-would cost seconds per move for no coach benefit.
+the observation, parity-tested against torch on real states, f32+f16).
+A hand-written simd128 dot kernel (wasm32-only; native autovectorizes)
+makes the 400 MFLOP forward 4.3x faster in WASM (~15-35 ms/move), so
+the champion brain covers both site roles: Neural opponents play the
+M11 raw policy, and the coach runs the same net's belief-guided
+analyze (worlds=4 — bull-unit scores, which the "+n bulls" badges
+need) in a web worker (~1 s per hand, off the main thread). The old
+MLP net is no longer shipped to the site.
 
 The M9 capacity conclusion stands refined: more MLP capacity was not
 the lever, but architecture was — and it was only reachable through
