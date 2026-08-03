@@ -69,13 +69,53 @@ impl Linear {
         debug_assert_eq!(y.len(), self.out);
         for (o, yo) in y.iter_mut().enumerate() {
             let row = &self.w[o * self.inp..(o + 1) * self.inp];
-            let mut acc = self.b[o];
-            for (wi, xi) in row.iter().zip(x) {
-                acc += wi * xi;
-            }
-            *yo = acc;
+            *yo = self.b[o] + dot(row, x);
         }
     }
+}
+
+/// Dot product; explicitly 4-lane SIMD on wasm32 (the attention net is
+/// ~400 MFLOPs of these per forward and LLVM does not autovectorize the
+/// scalar reduction well there), plain code elsewhere (native builds
+/// autovectorize fine).
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+fn dot(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::wasm32::*;
+    let n = a.len().min(b.len());
+    let chunks = n / 8;
+    let mut acc0 = f32x4_splat(0.0);
+    let mut acc1 = f32x4_splat(0.0);
+    unsafe {
+        let pa = a.as_ptr();
+        let pb = b.as_ptr();
+        for i in 0..chunks {
+            let off = i * 8;
+            let a0 = v128_load(pa.add(off) as *const v128);
+            let b0 = v128_load(pb.add(off) as *const v128);
+            let a1 = v128_load(pa.add(off + 4) as *const v128);
+            let b1 = v128_load(pb.add(off + 4) as *const v128);
+            acc0 = f32x4_add(acc0, f32x4_mul(a0, b0));
+            acc1 = f32x4_add(acc1, f32x4_mul(a1, b1));
+        }
+    }
+    let acc = f32x4_add(acc0, acc1);
+    let mut sum = f32x4_extract_lane::<0>(acc)
+        + f32x4_extract_lane::<1>(acc)
+        + f32x4_extract_lane::<2>(acc)
+        + f32x4_extract_lane::<3>(acc);
+    for i in chunks * 8..n {
+        sum += a[i] * b[i];
+    }
+    sum
+}
+
+#[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
+fn dot(a: &[f32], b: &[f32]) -> f32 {
+    let mut acc = 0.0f32;
+    for (ai, bi) in a.iter().zip(b) {
+        acc += ai * bi;
+    }
+    acc
 }
 
 struct ResBlock {
@@ -484,11 +524,7 @@ impl AttnNet {
                     let qi = &q[i * d + off..i * d + off + dh];
                     for (j, s) in scores.iter_mut().enumerate() {
                         let kj = &k[j * d + off..j * d + off + dh];
-                        let mut acc = 0.0f32;
-                        for e in 0..dh {
-                            acc += qi[e] * kj[e];
-                        }
-                        *s = acc * scale;
+                        *s = dot(qi, kj) * scale;
                     }
                     softmax_inplace(&mut scores);
                     let out = i * d + off;

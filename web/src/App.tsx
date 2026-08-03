@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, RefreshCw, Play, Settings2, Lightbulb } from "lucide-react";
 import type { EngineBot } from "./engine/pkg/take5_wasm";
-import { createEngineBot, engineAnalyze, engineChooseCard, loadEngine } from "./engine/bots";
+import { Coach, createEngineBot, engineChooseCard, loadEngine } from "./engine/bots";
 
 /**
  * Take 5 (a.k.a. 6 nimmt!) – Web Frontend
@@ -255,7 +255,7 @@ export default function Take5App() {
   const [coachHints, setCoachHints] = useState<Map<number, number> | null>(null);
   const [coachThinking, setCoachThinking] = useState(false);
   const engineBots = useRef<Map<PlayerId, EngineBot>>(new Map());
-  const coachBot = useRef<EngineBot | null>(null);
+  const coachBot = useRef<Coach | null>(null);
 
   function disposeEngineBots() {
     for (const bot of engineBots.current.values()) bot.free();
@@ -270,10 +270,10 @@ export default function Take5App() {
   }
 
   /** Lazily boot the WASM engine and per-seat bots for the current game.
-   * "Neural" opponents play the raw transformer policy (M11) — it beats
-   * the MLP-with-search champion head-to-head without any search. */
+   * "Neural" opponents play the champion transformer's raw policy — it
+   * beats the previous net's search mode head-to-head without any search. */
   async function ensureEngineBots(current: GameState): Promise<Map<PlayerId, EngineBot>> {
-    await loadEngine(false, difficulty === "neural");
+    await loadEngine(difficulty === "neural");
     for (const p of current.players) {
       if (!p.isHuman && usesEngine(p.strategy || difficulty) && !engineBots.current.has(p.id)) {
         engineBots.current.set(
@@ -301,8 +301,9 @@ export default function Take5App() {
     };
   }
 
-  // Coach mode: score the human's hand with the neural search bot whenever
-  // a fresh choice is on the table.
+  // Coach mode: score the human's hand with the champion net's
+  // belief-guided analyze — same brain as the strongest opponents,
+  // running in a web worker so the search never blocks the UI.
   useEffect(() => {
     if (!coach || state.phase !== "choose") {
       setCoachHints(null);
@@ -312,12 +313,8 @@ export default function Take5App() {
     (async () => {
       setCoachThinking(true);
       try {
-        await loadEngine(true);
-        coachBot.current ??= createEngineBot("neural", Math.floor(Math.random() * 1e9));
-        // Let the spinner paint before the (main-thread) search runs.
-        await new Promise(r => setTimeout(r, 30));
-        if (cancelled) return;
-        const scores = engineAnalyze(coachBot.current, seatView(state, 0));
+        coachBot.current ??= await Coach.create(Math.floor(Math.random() * 1e9));
+        const scores = await coachBot.current.analyze(seatView(state, 0));
         if (!cancelled) setCoachHints(scores);
       } catch (e) {
         console.error("coach failed", e);
