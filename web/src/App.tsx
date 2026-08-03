@@ -446,7 +446,16 @@ export default function Take5App() {
     const result = placeCardIntoRows(state.rows, 0, step.card, () => idx);
     const rows = result.rows;
     const taken = result.taken ?? [];
-    const playersUpdated = state.players.map(p => p.id === 0 ? { ...p, pen: taken.length ? [...p.pen, ...taken] : p.pen } : p);
+    // Remove the played card from the hand here too — every other
+    // resolution path does it before placing (a card that stayed in hand
+    // after taking a row could be played twice).
+    const playersUpdated = state.players.map(p => p.id === 0
+      ? {
+          ...p,
+          hand: p.hand.filter(c => c.id !== step.card.id),
+          pen: taken.length ? [...p.pen, ...taken] : p.pen,
+        }
+      : p);
 
     setState(prev => ({
       ...prev,
