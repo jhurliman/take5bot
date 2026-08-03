@@ -192,11 +192,20 @@ the champion brain covers both site roles: Neural opponents play the
 M11 raw policy, and the coach runs the same net's belief-guided
 analyze (worlds=4 — bull-unit scores, which the "+n bulls" badges
 need) in a web worker (~1 s per hand, off the main thread). The old
-MLP net is no longer shipped to the site. Search on top of M11 was
-measured and rejected: worlds=4 loses to the raw policy head-to-head
-(48.4%, 700 games) — the finetuned transformer has internalized what
-shallow determinized search offers, so the deployed raw policy is the
-strongest configuration, not a latency compromise.
+MLP net is no longer shipped to the site.
+
+Search on top of M11 (measured across independent seed batches, since
+single 700-game batches swing by several points): worlds=4 is parity
+within noise — 48.4% and 54.0% in two 700-game batches, 51.2% +/- 1.3%
+combined — but worlds=16 shows a real edge, 55.5% (400 games) and
+53.7% (700 games), 54.4% +/- 1.5% combined (~2.9 sigma, ~ +30 Elo).
+Think-time scaling still works on the transformer at larger budgets;
+shallow search adds nothing. The deployed raw policy is therefore the
+strongest configuration at interactive latency (a 16-world move costs
+~160 forwards, seconds per move in WASM), and the strongest known
+configuration overall is neural:16 on native hardware. The coach's
+worlds=4 analyze is for bull-unit cost calibration, not extra playing
+strength.
 
 The M9 capacity conclusion stands refined: more MLP capacity was not
 the lever, but architecture was — and it was only reachable through
