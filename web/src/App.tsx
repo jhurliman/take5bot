@@ -821,19 +821,205 @@ function CardView({ card, small }: { card: Card; small?: boolean }) {
   );
 }
 
-/** Generic bull-shaped icon (simple SVG, easy to swap for a traced official silhouette later) */
-function BullIcon({ size = 12, color = "#1e3a8a" }: { size?: number; color?: string }) {
+/** Bull-head silhouette (front view, official-card style: broad lyre
+ * horns, side ears, tapering face). One fill color; scales from 8 px
+ * pips to the full card face. Pass no size for 100% width/height. */
+function BullIcon({ size, color = "#1e3a8a" }: { size?: number; color?: string }) {
   return (
     <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
+      width={size ?? "100%"}
+      height={size ?? "100%"}
+      viewBox="0 0 100 100"
       fill={color}
       aria-hidden
     >
-      {/* stylized horns + head */}
-      <path d="M6 5c1 0 2 .4 2.7 1.1l1.5 1.5c.5-.2 1.1-.3 1.8-.3s1.3.1 1.8.3l1.5-1.5C16 5.4 17 5 18 5c.7 0 1.3.2 1.8.6l-1.2 1.8c-.2-.1-.4-.1-.6-.1-.6 0-1.1.2-1.5.6l-.8.8c.7.9 1.1 2 1.1 3.3 0 2.8-2.1 5-4.8 5.2v1.3h-2v-1.3C7.1 17.2 5 15 5 12.2c0-1.2.4-2.4 1.1-3.3l-.8-.8c-.4-.4-.9-.6-1.5-.6-.2 0-.4 0-.6.1L2 5.6C2.7 5.2 3.3 5 4 5c1 0 2 .4 2.7 1.1z" />
+      {/* left horn */}
+      <path d="M38 36 C20 38 8 28 8 12 C8 7 13 5 15.5 9 C18 21 27 28 39 28 C42 30 41 35 38 36 Z" />
+      {/* right horn */}
+      <path d="M62 36 C80 38 92 28 92 12 C92 7 87 5 84.5 9 C82 21 73 28 61 28 C58 30 59 35 62 36 Z" />
+      {/* ears */}
+      <ellipse cx="28" cy="44" rx="10" ry="5.5" transform="rotate(-18 28 44)" />
+      <ellipse cx="72" cy="44" rx="10" ry="5.5" transform="rotate(18 72 44)" />
+      {/* head */}
+      <path d="M50 30 C40 30 33.5 38 33.5 48 C33.5 60 42 68 45.5 78 C47.5 83.5 52.5 83.5 54.5 78 C58 68 66.5 60 66.5 48 C66.5 38 60 30 50 30 Z" />
     </svg>
+  );
+}
+
+/** Inline bull count: the number plus a small bull icon (replaces the
+ * old, cryptic triangle glyph). Inherits the surrounding text color. */
+function Bulls({ n }: { n: number }) {
+  return (
+    <span className="inline-flex items-center gap-[3px] whitespace-nowrap align-middle">
+      {n}
+      <BullIcon size={11} color="currentColor" />
+    </span>
+  );
+}
+
+/** Face theming that follows the official deck: silver for 1 bull,
+ * blue for 2 (ends in 5), amber for 3 (ends in 0), red for 5
+ * (multiples of 11), purple for the 7-bull 55. */
+function themeForCard(n: number) {
+  if (n === 55) {
+    return {
+      face: "linear-gradient(180deg,#8b5cf6,#6d28d9)",
+      burstA: "rgba(255,255,255,.28)", burstB: "rgba(76,29,149,.35)",
+      frame: "rgba(255,255,255,.35)",
+      bull: "#2e1065", num: "#ffffff", numStroke: "#2e1065",
+      pip: "#fbbf24", corner: "#ede9fe",
+    };
+  }
+  if (n % 11 === 0) {
+    return {
+      face: "linear-gradient(180deg,#ef4444,#b91c1c)",
+      burstA: "rgba(255,255,255,.28)", burstB: "rgba(127,29,29,.35)",
+      frame: "rgba(255,255,255,.3)",
+      bull: "#450a0a", num: "#ffffff", numStroke: "#450a0a",
+      pip: "#4ade80", corner: "#fecaca",
+    };
+  }
+  if (n % 10 === 0) {
+    return {
+      face: "linear-gradient(180deg,#fcd34d,#f59e0b)",
+      burstA: "rgba(255,255,255,.45)", burstB: "rgba(180,83,9,.25)",
+      frame: "rgba(120,53,15,.35)",
+      bull: "#1e40af", num: "#ffffff", numStroke: "#92400e",
+      pip: "#92400e", corner: "#78350f",
+    };
+  }
+  if (n % 5 === 0) {
+    return {
+      face: "linear-gradient(180deg,#3b82f6,#1d4ed8)",
+      burstA: "rgba(255,255,255,.25)", burstB: "rgba(30,58,138,.3)",
+      frame: "rgba(255,255,255,.35)",
+      bull: "#172554", num: "#fde047", numStroke: "#172554",
+      pip: "#fde047", corner: "#dbeafe",
+    };
+  }
+  return {
+    face: "linear-gradient(180deg,#f8fafc,#dbe3ea)",
+    burstA: "rgba(255,255,255,.9)", burstB: "rgba(148,163,184,.25)",
+    frame: "rgba(30,64,175,.25)",
+    bull: "#1e40af", num: "#ffffff", numStroke: "#1e3a8a",
+    pip: "#1e40af", corner: "#334155",
+  };
+}
+
+function CardView({ card, small }: { card: Card; small?: boolean }) {
+  const theme = themeForCard(card.id);
+
+  const W = small ? 72 : 92;
+  const H = small ? 96 : 124;
+
+  return (
+    <div
+      className="relative select-none rounded-xl shadow card-surface"
+      style={{
+        width: W,
+        height: H,
+        // paper / bevel look
+        background:
+          "radial-gradient(120% 100% at 50% 0%, #f7fafc 0%, #e6ecf1 60%, #dfe7ee 100%)",
+        boxShadow:
+          "inset 0 1px 0 rgba(255,255,255,.6), inset 0 -2px 4px rgba(0,0,0,.08), 0 2px 6px rgba(0,0,0,.25)",
+        border: "1px solid rgba(0,0,0,.12)",
+      }}
+    >
+      {/* subtle inner border */}
+      <div
+        className="absolute inset-0 rounded-xl"
+        style={{ boxShadow: "inset 0 0 0 2px rgba(255,255,255,.55)" }}
+      />
+
+      {/* top band (accent) */}
+      <div
+        className="absolute left-1 right-1 rounded-md"
+        style={{
+          top: small ? 29 : 35,
+          height: small ? 31 : 37,
+          background: theme.band,
+          boxShadow: "inset 0 0 0 1px rgba(0,0,0,.08)",
+        }}
+      />
+
+      {/* corner indices */}
+      <div className="absolute text-[10px] leading-none opacity-70" style={{ top: 6, left: 6 }}>
+        {card.id}
+      </div>
+      <div
+        className="absolute text-[10px] leading-none opacity-70"
+        style={{ bottom: 6, right: 6, transform: "rotate(180deg)" }}
+      >
+        {card.id}
+      </div>
+
+      {/* big number with outline + shadow */}
+      <div
+        className="absolute font-extrabold tracking-tight number-face"
+        style={{
+          top: small ? 32 : 38,
+          left: 0,
+          right: 0,
+          textAlign: "center",
+          fontSize: small ? 26 : 32,
+          color: theme.num,
+          WebkitTextStroke: small ? "1px #fff" : "2px #fff",
+          textShadow:
+            "0 2px 0 rgba(0,0,0,.10), 0 3px 6px rgba(0,0,0,.15)",
+          fontFamily:
+            "'Bungee', 'Paytone One', system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
+        }}
+      >
+        {card.id}
+      </div>
+
+      {/* bulls row (penalty pips) */}
+      <div
+        className="absolute flex items-center justify-center gap-[2px]"
+        style={{ bottom: small ? 6 : 8, left: 0, right: 0 }}
+      >
+        {Array.from({ length: card.bulls }).map((_, i) => (
+          <BullIcon key={i} size={small ? 10 : 12} color={theme.bull} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Bull-head silhouette (front view, official-card style: broad lyre
+ * horns, side ears, tapering face). One fill color; scales from 8 px
+ * pips to the full card face. Pass no size for 100% width/height. */
+function BullIcon({ size, color = "#1e3a8a" }: { size?: number; color?: string }) {
+  return (
+    <svg
+      width={size ?? "100%"}
+      height={size ?? "100%"}
+      viewBox="0 0 100 100"
+      fill={color}
+      aria-hidden
+    >
+      {/* left horn */}
+      <path d="M38 36 C20 38 8 28 8 12 C8 7 13 5 15.5 9 C18 21 27 28 39 28 C42 30 41 35 38 36 Z" />
+      {/* right horn */}
+      <path d="M62 36 C80 38 92 28 92 12 C92 7 87 5 84.5 9 C82 21 73 28 61 28 C58 30 59 35 62 36 Z" />
+      {/* ears */}
+      <ellipse cx="28" cy="44" rx="10" ry="5.5" transform="rotate(-18 28 44)" />
+      <ellipse cx="72" cy="44" rx="10" ry="5.5" transform="rotate(18 72 44)" />
+      {/* head */}
+      <path d="M50 30 C40 30 33.5 38 33.5 48 C33.5 60 42 68 45.5 78 C47.5 83.5 52.5 83.5 54.5 78 C58 68 66.5 60 66.5 48 C66.5 38 60 30 50 30 Z" />
+    </svg>
+  );
+}
+
+/** Inline bull count: the number plus a small bull icon (replaces the
+ * old, cryptic triangle glyph). Inherits the surrounding text color. */
+function Bulls({ n }: { n: number }) {
+  return (
+    <span className="inline-flex items-center gap-[3px] whitespace-nowrap align-middle">
+      {n}
+      <BullIcon size={11} color="currentColor" />
+    </span>
   );
 }
 
