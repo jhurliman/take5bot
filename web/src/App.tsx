@@ -429,7 +429,7 @@ export default function Take5App() {
       const rows = result.rows;
       const taken = result.taken ?? [];
       const playersUpdated = ps.map(p => p.id === step.pid ? { ...p, pen: taken.length ? [...p.pen, ...taken] : p.pen } : p);
-      const log = taken.length ? [`${nameFor(state, step.pid)} takes ${taken.length} cards (${sumBulls(taken)}⟁)`] : [];
+      const log = taken.length ? [`${nameFor(state, step.pid)} takes ${taken.length} cards (${sumBulls(taken)} bulls)`] : [];
       const t = setTimeout(() => {
         setState(prev => ({
           ...prev,
@@ -450,7 +450,7 @@ export default function Take5App() {
         const rows = result.rows;
         const taken = result.taken ?? [];
         const playersUpdated = ps.map(p => p.id === step.pid ? { ...p, pen: taken.length ? [...p.pen, ...taken] : p.pen } : p);
-        const log = `${nameFor(state, step.pid)} chooses row ${botIdx + 1} and takes ${sumBulls(taken)}⟁`;
+        const log = `${nameFor(state, step.pid)} chooses row ${botIdx + 1} and takes ${sumBulls(taken)} bulls`;
         const t = setTimeout(() => {
           setState(prev => ({
             ...prev,
@@ -492,7 +492,7 @@ export default function Take5App() {
       pendingPlacements: prev.pendingPlacements.slice(1),
       needRowChoiceFor: undefined,
       phase: "resolve",
-      history: [...prev.history, `You choose row ${idx + 1} and take ${sumBulls(taken)}⟁`]
+      history: [...prev.history, `You choose row ${idx + 1} and take ${sumBulls(taken)} bulls`]
     }));
   }
 
@@ -598,9 +598,9 @@ export default function Take5App() {
             {leaderboard.map(p => (
               <div key={p.id} className="flex items-center justify-between bg-slate-900/60 rounded-xl px-3 py-2">
                 <span>{p.name}</span>
-                <span>
-                  {sumBulls(p.pen)}⟁
-                  <span className="ml-2 opacity-60">Σ {state.totals[p.id] + sumBulls(p.pen)}</span>
+                <span className="inline-flex items-center gap-1">
+                  <Bulls n={sumBulls(p.pen)} />
+                  <span className="ml-1 opacity-60">match {state.totals[p.id] + sumBulls(p.pen)}</span>
                 </span>
               </div>
             ))}
@@ -677,7 +677,7 @@ function Table({ rows }:{ rows:[Row, Row, Row, Row] }) {
             <span>•</span>
             <span>{rows[i].length} card{rows[i].length !== 1 ? "s" : ""}</span>
             <span>•</span>
-            <span>{sumBulls(rows[i])}⟁</span>
+            <Bulls n={sumBulls(rows[i])} />
           </div>
           <div className="flex gap-2 overflow-x-auto pb-1">
             {rows[i].map((c) => (
@@ -741,141 +741,179 @@ function Hand({ cards, chosen, onChoose, disabled, hints }:{
 }
 
 function CardView({ card, small }: { card: Card; small?: boolean }) {
-  const theme = themeForCard(card.id);
-
+  const t = themeForCard(card.id);
   const W = small ? 72 : 92;
   const H = small ? 96 : 124;
 
   return (
     <div
-      className="relative select-none rounded-xl shadow card-surface"
+      className="relative select-none rounded-xl card-surface overflow-hidden"
       style={{
         width: W,
         height: H,
-        // paper / bevel look
-        background:
-          "radial-gradient(120% 100% at 50% 0%, #f7fafc 0%, #e6ecf1 60%, #dfe7ee 100%)",
+        background: t.face,
+        border: "1px solid rgba(0,0,0,.2)",
         boxShadow:
-          "inset 0 1px 0 rgba(255,255,255,.6), inset 0 -2px 4px rgba(0,0,0,.08), 0 2px 6px rgba(0,0,0,.25)",
-        border: "1px solid rgba(0,0,0,.12)",
+          "inset 0 1px 0 rgba(255,255,255,.5), inset 0 -2px 4px rgba(0,0,0,.10), 0 2px 6px rgba(0,0,0,.3)",
       }}
     >
-      {/* subtle inner border */}
+      {/* silver starburst behind the bull, like the printed cards */}
       <div
-        className="absolute inset-0 rounded-xl"
-        style={{ boxShadow: "inset 0 0 0 2px rgba(255,255,255,.55)" }}
-      />
-
-      {/* top band (accent) */}
-      <div
-        className="absolute left-1 right-1 rounded-md"
+        className="absolute inset-0"
         style={{
-          top: small ? 29 : 35,
-          height: small ? 31 : 37,
-          background: theme.band,
-          boxShadow: "inset 0 0 0 1px rgba(0,0,0,.08)",
+          background: `repeating-conic-gradient(from 0deg at 50% 54%, ${t.burstA} 0deg 5deg, ${t.burstB} 5deg 10deg)`,
+          opacity: 0.5,
         }}
       />
+      {/* inner frame */}
+      <div
+        className="absolute inset-[3px] rounded-lg"
+        style={{ boxShadow: `inset 0 0 0 1.5px ${t.frame}` }}
+      />
+
+      {/* bull-count pips along the top edge */}
+      <div
+        className="absolute flex items-center justify-center gap-[2px]"
+        style={{ top: small ? 4 : 5, left: 0, right: 0 }}
+      >
+        {Array.from({ length: card.bulls }).map((_, i) => (
+          <BullIcon key={i} size={small ? 8 : 10} color={t.pip} />
+        ))}
+      </div>
 
       {/* corner indices */}
-      <div className="absolute text-[10px] leading-none opacity-70" style={{ top: 6, left: 6 }}>
+      <div
+        className="absolute font-bold leading-none"
+        style={{ top: small ? 14 : 17, left: 5, fontSize: small ? 9 : 10, color: t.corner }}
+      >
         {card.id}
       </div>
       <div
-        className="absolute text-[10px] leading-none opacity-70"
-        style={{ bottom: 6, right: 6, transform: "rotate(180deg)" }}
+        className="absolute font-bold leading-none"
+        style={{
+          bottom: small ? 5 : 6,
+          right: 5,
+          fontSize: small ? 9 : 10,
+          color: t.corner,
+          transform: "rotate(180deg)",
+        }}
       >
         {card.id}
       </div>
 
-      {/* big number with outline + shadow */}
+      {/* the bull */}
+      <div
+        className="absolute left-1/2 -translate-x-1/2"
+        style={{ top: "17%", width: "80%", height: "70%" }}
+      >
+        <BullIcon color={t.bull} />
+      </div>
+
+      {/* big number over the bull's forehead */}
       <div
         className="absolute font-extrabold tracking-tight number-face"
         style={{
-          top: small ? 32 : 38,
+          top: "50%",
           left: 0,
           right: 0,
+          transform: "translateY(-52%)",
           textAlign: "center",
-          fontSize: small ? 26 : 32,
-          color: theme.num,
-          WebkitTextStroke: small ? "1px #fff" : "2px #fff",
-          textShadow:
-            "0 2px 0 rgba(0,0,0,.10), 0 3px 6px rgba(0,0,0,.15)",
+          fontSize: small ? 25 : 33,
+          color: t.num,
+          WebkitTextStroke: small ? `1.2px ${t.numStroke}` : `1.8px ${t.numStroke}`,
+          textShadow: "0 2px 3px rgba(0,0,0,.35)",
           fontFamily:
             "'Bungee', 'Paytone One', system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
         }}
       >
         {card.id}
       </div>
-
-      {/* bulls row (penalty pips) */}
-      <div
-        className="absolute flex items-center justify-center gap-[2px]"
-        style={{ bottom: small ? 6 : 8, left: 0, right: 0 }}
-      >
-        {Array.from({ length: card.bulls }).map((_, i) => (
-          <BullIcon key={i} size={small ? 10 : 12} color={theme.bull} />
-        ))}
-      </div>
     </div>
   );
 }
 
-/** Generic bull-shaped icon (simple SVG, easy to swap for a traced official silhouette later) */
-function BullIcon({ size = 12, color = "#1e3a8a" }: { size?: number; color?: string }) {
+/** Bull-head silhouette (front view, official-card style: broad lyre
+ * horns, side ears, tapering face). One fill color; scales from 8 px
+ * pips to the full card face. Pass no size for 100% width/height. */
+function BullIcon({ size, color = "#1e3a8a" }: { size?: number; color?: string }) {
   return (
     <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
+      width={size ?? "100%"}
+      height={size ?? "100%"}
+      viewBox="0 0 100 100"
       fill={color}
       aria-hidden
     >
-      {/* stylized horns + head */}
-      <path d="M6 5c1 0 2 .4 2.7 1.1l1.5 1.5c.5-.2 1.1-.3 1.8-.3s1.3.1 1.8.3l1.5-1.5C16 5.4 17 5 18 5c.7 0 1.3.2 1.8.6l-1.2 1.8c-.2-.1-.4-.1-.6-.1-.6 0-1.1.2-1.5.6l-.8.8c.7.9 1.1 2 1.1 3.3 0 2.8-2.1 5-4.8 5.2v1.3h-2v-1.3C7.1 17.2 5 15 5 12.2c0-1.2.4-2.4 1.1-3.3l-.8-.8c-.4-.4-.9-.6-1.5-.6-.2 0-.4 0-.6.1L2 5.6C2.7 5.2 3.3 5 4 5c1 0 2 .4 2.7 1.1z" />
+      {/* left horn */}
+      <path d="M38 36 C20 38 8 28 8 12 C8 7 13 5 15.5 9 C18 21 27 28 39 28 C42 30 41 35 38 36 Z" />
+      {/* right horn */}
+      <path d="M62 36 C80 38 92 28 92 12 C92 7 87 5 84.5 9 C82 21 73 28 61 28 C58 30 59 35 62 36 Z" />
+      {/* ears */}
+      <ellipse cx="28" cy="44" rx="10" ry="5.5" transform="rotate(-18 28 44)" />
+      <ellipse cx="72" cy="44" rx="10" ry="5.5" transform="rotate(18 72 44)" />
+      {/* head */}
+      <path d="M50 30 C40 30 33.5 38 33.5 48 C33.5 60 42 68 45.5 78 C47.5 83.5 52.5 83.5 54.5 78 C58 68 66.5 60 66.5 48 C66.5 38 60 30 50 30 Z" />
     </svg>
   );
 }
 
-/** Color / band logic to mimic the physical categories */
+/** Inline bull count: the number plus a small bull icon (replaces the
+ * old, cryptic triangle glyph). Inherits the surrounding text color. */
+function Bulls({ n }: { n: number }) {
+  return (
+    <span className="inline-flex items-center gap-[3px] whitespace-nowrap align-middle">
+      {n}
+      <BullIcon size={11} color="currentColor" />
+    </span>
+  );
+}
+
+/** Face theming that follows the official deck: silver for 1 bull,
+ * blue for 2 (ends in 5), amber for 3 (ends in 0), red for 5
+ * (multiples of 11), purple for the 7-bull 55. */
 function themeForCard(n: number) {
   if (n === 55) {
     return {
-      band:
-        "repeating-linear-gradient(135deg,#fca5a5 0 6px,#ef4444 6px 12px)",
-      num: "#991b1b",
-      bull: "#7f1d1d",
+      face: "linear-gradient(180deg,#8b5cf6,#6d28d9)",
+      burstA: "rgba(255,255,255,.28)", burstB: "rgba(76,29,149,.35)",
+      frame: "rgba(255,255,255,.35)",
+      bull: "#2e1065", num: "#ffffff", numStroke: "#2e1065",
+      pip: "#fbbf24", corner: "#ede9fe",
     };
   }
   if (n % 11 === 0) {
     return {
-      band:
-        "linear-gradient(180deg,#ddd6fe 0%,#c4b5fd 100%)", // purple-ish
-      num: "#3730a3",
-      bull: "#312e81",
+      face: "linear-gradient(180deg,#ef4444,#b91c1c)",
+      burstA: "rgba(255,255,255,.28)", burstB: "rgba(127,29,29,.35)",
+      frame: "rgba(255,255,255,.3)",
+      bull: "#450a0a", num: "#ffffff", numStroke: "#450a0a",
+      pip: "#4ade80", corner: "#fecaca",
     };
   }
   if (n % 10 === 0) {
     return {
-      band:
-        "linear-gradient(180deg,#fed7aa 0%,#fdba74 100%)", // orange
-      num: "#9a3412",
-      bull: "#7c2d12",
+      face: "linear-gradient(180deg,#fcd34d,#f59e0b)",
+      burstA: "rgba(255,255,255,.45)", burstB: "rgba(180,83,9,.25)",
+      frame: "rgba(120,53,15,.35)",
+      bull: "#1e40af", num: "#ffffff", numStroke: "#92400e",
+      pip: "#92400e", corner: "#78350f",
     };
   }
   if (n % 5 === 0) {
     return {
-      band:
-        "linear-gradient(180deg,#fde68a 0%,#fbbf24 100%)", // yellow
-      num: "#92400e",
-      bull: "#78350f",
+      face: "linear-gradient(180deg,#3b82f6,#1d4ed8)",
+      burstA: "rgba(255,255,255,.25)", burstB: "rgba(30,58,138,.3)",
+      frame: "rgba(255,255,255,.35)",
+      bull: "#172554", num: "#fde047", numStroke: "#172554",
+      pip: "#fde047", corner: "#dbeafe",
     };
   }
-  // default blue
   return {
-    band: "linear-gradient(180deg,#bfdbfe 0%,#93c5fd 100%)",
-    num: "#1e3a8a",
-    bull: "#1e3a8a",
+    face: "linear-gradient(180deg,#f8fafc,#dbe3ea)",
+    burstA: "rgba(255,255,255,.9)", burstB: "rgba(148,163,184,.25)",
+    frame: "rgba(30,64,175,.25)",
+    bull: "#1e40af", num: "#ffffff", numStroke: "#1e3a8a",
+    pip: "#1e40af", corner: "#334155",
   };
 }
 
@@ -918,7 +956,7 @@ function RowChoice({ rows, onPick, hints, thinking }:{
                       {isBest ? "★" : `+${cost.toFixed(1)}`}
                     </span>
                   )}</span>
-                  <span>{sumBulls(rows[i])}⟁</span>
+                  <Bulls n={sumBulls(rows[i])} />
                 </div>
                 <div className="flex gap-2 overflow-x-auto">
                   {rows[i].map(c => <CardView key={c.id} card={c} small />)}
