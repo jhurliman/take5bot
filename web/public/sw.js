@@ -20,7 +20,11 @@
  * clients will keep serving the old net.
  */
 
-const CACHE_VERSION = "take5bot-v1";
+// Cache Storage is keyed per ORIGIN, not per service-worker scope, and
+// jhurliman.github.io hosts every project site. Deletions must therefore be
+// restricted to our own prefix or they would wipe other apps' offline caches.
+const CACHE_PREFIX = "take5bot-";
+const CACHE_VERSION = `${CACHE_PREFIX}v1`;
 const BASE = new URL("./", self.location).pathname;
 const SHELL = `${BASE}index.html`;
 
@@ -39,7 +43,11 @@ self.addEventListener("activate", (event) => {
     caches
       .keys()
       .then((keys) =>
-        Promise.all(keys.filter((k) => k !== CACHE_VERSION).map((k) => caches.delete(k))),
+        Promise.all(
+          keys
+            .filter((k) => k.startsWith(CACHE_PREFIX) && k !== CACHE_VERSION)
+            .map((k) => caches.delete(k)),
+        ),
       )
       .then(() => self.clients.claim()),
   );

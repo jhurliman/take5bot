@@ -322,6 +322,12 @@ export default function Take5App() {
   const playInFlight = useRef(false);
   /** Last hand tap, so a second tap on the selected card can commit. */
   const lastTap = useRef<{ id: number; t: number } | null>(null);
+  /** Bumped whenever the deal is replaced. Opponent moves now cross a
+   *  worker round-trip, and that async window is long enough for the user
+   *  to start a new game or apply settings; without this, choices made
+   *  for the old deal get applied to the freshly dealt state and then
+   *  scheduled for resolution against the new rows. */
+  const gameToken = useRef(0);
 
   function getBots(needNet: boolean): Promise<Bots> {
     const cur = botRunner.current;
@@ -349,6 +355,7 @@ export default function Take5App() {
   useEffect(() => disposeWorkers, []);
 
   function startNewGame(pCount = playersCount, customSeed?: number, diff = difficulty) {
+    gameToken.current++;
     const s = customSeed ?? Math.floor(1 + Math.random() * 1e9);
     // Free the per-seat bots (their seeds derive from the game seed) but
     // keep the worker, its compiled module and its weights.
@@ -474,6 +481,9 @@ export default function Take5App() {
     const chosen = explicit ?? state.players[0].chosen;
     if (!chosen) return;
 
+    // Snapshot the deal identity before any await; see gameToken.
+    const token = gameToken.current;
+
     playInFlight.current = true;
     try {
       // Bots pick. Engine-backed strategies run in a worker, so the ~15-35 ms
@@ -496,6 +506,10 @@ export default function Take5App() {
         }
       }
 
+      // The deal was replaced while the worker was thinking: these picks
+      // belong to a game that no longer exists.
+      if (token !== gameToken.current) return;
+
       const withChoices = state.players.map(p => {
         // Use the local `chosen`, not p.chosen: it is authoritative for
         // the tap-again path and removes a stale-state dependency.
@@ -510,11 +524,17 @@ export default function Take5App() {
         return { ...p, chosen: c };
       });
 
-      setState(prev => ({ ...prev, players: withChoices, phase: "reveal" }));
+      setState(prev =>
+        token === gameToken.current
+          ? { ...prev, players: withChoices, phase: "reveal" }
+          : prev,
+      );
 
       // After a short reveal, resolve in ascending order
       setTimeout(() => {
+        if (token !== gameToken.current) return;
         setState(prev => {
+          if (prev.phase !== "reveal") return prev;
           const placements = withChoices.map(p => ({ pid: p.id, card: p.chosen! }))
             .sort((a, b) => a.card.id - b.card.id);
           return { ...prev, pendingPlacements: placements, phase: "resolve" };
@@ -630,6 +650,7 @@ export default function Take5App() {
 
   // Deal fresh hands, carrying match totals forward (first to 66 ends it).
   function nextDeal() {
+    gameToken.current++;
     const s = Math.floor(1 + Math.random() * 1e9);
     setSeed(s);
     setState(prev => {

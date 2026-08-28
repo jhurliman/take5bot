@@ -229,15 +229,23 @@ impl<'a> Reader<'a> {
         if end > self.data.len() {
             return Err(NeuralError::Truncated);
         }
+        // as_chunks over chunks_exact: `end` is pos + elem * n, so the
+        // slice length is always an exact multiple and the remainder half
+        // of the tuple is empty. It also yields &[u8; N] directly, which
+        // drops the try_into().unwrap() panic path.
         let out = if self.dtype == DTYPE_F16 {
             self.data[self.pos..end]
-                .chunks_exact(2)
-                .map(|c| f16_to_f32(u16::from_le_bytes(c.try_into().unwrap())))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|&c| f16_to_f32(u16::from_le_bytes(c)))
                 .collect()
         } else {
             self.data[self.pos..end]
-                .chunks_exact(4)
-                .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|&c| f32::from_le_bytes(c))
                 .collect()
         };
         self.pos = end;
