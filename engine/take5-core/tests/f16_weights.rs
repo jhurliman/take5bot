@@ -30,8 +30,8 @@ fn fixed_obs() -> Vec<f32> {
 #[test]
 fn champion_f16_weights_decode_and_infer() {
     let path = weights_path();
-    let bytes = std::fs::read(&path)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let bytes =
+        std::fs::read(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
 
     let net = NeuralNet::from_bytes(&bytes).expect("champion weights should load");
     let out = net.forward(&fixed_obs());
@@ -43,7 +43,11 @@ fn champion_f16_weights_decode_and_infer() {
     // The net still "loads", so the only thing that catches it is the
     // numbers themselves: garbage weights blow the activations up or
     // produce NaN long before they stay in a plausible logit range.
-    assert!(out.value.is_finite(), "value must be finite, got {}", out.value);
+    assert!(
+        out.value.is_finite(),
+        "value must be finite, got {}",
+        out.value
+    );
     assert!(
         out.value.abs() < 100.0,
         "value {} is implausible for a trained net",
@@ -61,7 +65,17 @@ fn champion_f16_weights_decode_and_infer() {
     // Decoding is pure: the same bytes must give the same numbers.
     let again = NeuralNet::from_bytes(&bytes).expect("reload");
     let out2 = again.forward(&fixed_obs());
-    assert_eq!(out.value.to_bits(), out2.value.to_bits(), "value not deterministic");
-    assert_eq!(out.policy_logits, out2.policy_logits, "policy not deterministic");
-    assert_eq!(out.belief_logits, out2.belief_logits, "belief not deterministic");
+    assert_eq!(
+        out.value.to_bits(),
+        out2.value.to_bits(),
+        "value not deterministic"
+    );
+    assert_eq!(
+        out.policy_logits, out2.policy_logits,
+        "policy not deterministic"
+    );
+    assert_eq!(
+        out.belief_logits, out2.belief_logits,
+        "belief not deterministic"
+    );
 }
