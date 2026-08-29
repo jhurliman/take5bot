@@ -2,11 +2,37 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>take5bot</title>
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Bungee&family=Paytone+One&display=swap" rel="stylesheet">
+    <!-- viewport-fit=cover is what makes env(safe-area-inset-*) non-zero.
+         Without it every safe-area rule in index.css is a no-op and the
+         notch clips the board in landscape.
+         No maximum-scale / user-scalable=no on purpose: iOS has ignored
+         them since iOS 10 as an accessibility override, and the two real
+         zoom vectors are handled properly instead (touch-action:
+         manipulation on buttons, 16px seed input). -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+
+    <title>take5bot: Take 5 / 6 nimmt!</title>
+    <meta
+      name="description"
+      content="Play Take 5 (6 nimmt!) against a trained neural bot, with an optional coach that scores every card in your hand."
+    />
+
+    <!-- Must match bg-slate-950. Tailwind v4 defines slate-950 in oklch;
+         its sRGB value is #020618 (NOT the v3 #020617); a wrong value
+         shows as a seam between the iOS status bar and the app. -->
+    <meta name="theme-color" content="#020618" />
+
+    <!-- Home-screen web app. mobile-web-app-capable is the standard name;
+         apple-* is the legacy one iOS still reads. Ship both. -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="take5bot" />
+
+    <link rel="icon" type="image/svg+xml" href="icon.svg" />
+    <link rel="alternate icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon-180.png" />
+    <link rel="manifest" href="manifest.webmanifest" />
   </head>
   <body>
     <div id="root"></div>
